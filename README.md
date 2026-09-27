@@ -22,4 +22,6 @@
 
 这是无构建依赖的静态网站。可直接用任意静态 HTTP 服务启动；部署到 GitHub Pages 时，将仓库根目录发布为 Pages 根目录。
 
+GitHub Pages：<https://tanhaoyu646-bit.github.io/hxd1c-running-credential-confirmation/>
+
 游戏包中的株洲站实景资源仅用于本项目的课堂场景转换，原始游戏目录未被修改。
