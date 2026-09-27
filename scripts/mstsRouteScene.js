@@ -1,9 +1,10 @@
 import * as THREE from '../lib/three/three.module.js';
+import { ROUTE_CONTEXT } from './credentialScenario.js?rev=workflow-signal-lkj-v2-20260927';
 
 const SOURCE_PATH = '../assets/route/jingguang/zhuzhou-13877-scene.json';
 const ROUTE_PATH = '../assets/route/jingguang/zhuzhou-1-southbound-path.json';
 const TEXTURE_PATH = '../assets/route/jingguang/textures/';
-const NEXT_STATION_DISTANCE = 549.58;
+const NEXT_STATION_DISTANCE = ROUTE_CONTEXT.departureSignalDistance;
 // 真实路线模型优先。程序化轨道仅保留作回退实验，默认不得覆盖游戏来源的轨道与站台。
 const ROUTE_RENDER_OPTIONS = Object.freeze({
   proceduralTrack: false,
@@ -39,6 +40,8 @@ export class MstsRouteScene {
     this.forward = new THREE.Vector3(0, 0, -1);
     this.baseYaw = Math.atan2(-this.forward.x, -this.forward.z);
     this.signalAspect = 'green';
+    this.scenarioId = 'normal';
+    this.signalLampVisibility = 1;
     this.departureSignal = null;
     this.signalRaycaster = new THREE.Raycaster();
     this.signalPointer = new THREE.Vector2();
@@ -375,15 +378,13 @@ export class MstsRouteScene {
   }
 
   buildSourceDepartureSignal(data) {
-    // 从游戏路线的 SignalObj 选择最近、处于列车前方且贴近当前运行股道的矮型出站信号机。
-    const candidates = data.instances
-      .filter((instance) => instance.type === 'SignalObj' && instance.shape === 'chuzhan.s')
-      .map((instance) => ({ instance, projection: this.projectPointToPath(instance.position) }))
-      .filter(({ projection }) => projection && projection.alongDistance >= 200 && projection.alongDistance <= 1000 && projection.lateralDistance <= 12)
-      .sort((a, b) => a.projection.alongDistance - b.projection.alongDistance || a.projection.lateralDistance - b.projection.lateralDistance);
-    const selected = candidates[0];
+    // 固定使用已核对的株洲站 1 道出站信号机，不能再以“最近信号机”猜测本股道对象。
+    const source = data.instances.find((instance) => instance.uid === ROUTE_CONTEXT.departureSignalSourceUid
+      && instance.type === 'SignalObj' && instance.shape === 'chuzhan.s');
+    const projection = source ? this.projectPointToPath(source.position) : null;
+    const selected = source && projection ? { instance: source, projection } : null;
     if (!selected) {
-      this.error = new Error('未在当前运行路径前方找到可验证的矮型出站信号机。');
+      this.error = new Error('未找到株洲站 1 道已配置的矮型出站信号机。');
       return;
     }
 
@@ -434,7 +435,36 @@ export class MstsRouteScene {
     for (const [name, material] of Object.entries(this.departureSignal.lamps)) {
       const on = active.includes(name);
       material.color.set(on ? colors[name] : '#121617');
-      material.opacity = on ? 1 : 0.72;
+      material.opacity = on ? this.signalLampVisibility : Math.min(0.72, this.signalLampVisibility * 0.72);
+    }
+  }
+
+  setTrainingScenario(scenarioId) {
+    this.scenarioId = scenarioId || 'normal';
+    this.updateAtmosphere();
+  }
+
+  updateAtmosphere() {
+    const weather = this.scenarioId === 'weather';
+    const remaining = Math.max(0, ROUTE_CONTEXT.departureSignalDistance - this.distance);
+    let near = 500;
+    let far = 1600;
+    let lampVisibility = 1;
+    if (weather) {
+      if (remaining > ROUTE_CONTEXT.weatherSignalApproachDistance) {
+        near = 18; far = 110; lampVisibility = 0.08;
+      } else if (remaining > ROUTE_CONTEXT.weatherSignalClearDistance) {
+        near = 24; far = 185; lampVisibility = 0.34;
+      } else {
+        near = 85; far = 620; lampVisibility = 1;
+      }
+    }
+    this.scene.background.set(weather ? '#83929a' : '#a7bdca');
+    this.scene.fog.near = near;
+    this.scene.fog.far = far;
+    if (Math.abs(this.signalLampVisibility - lampVisibility) > 0.01) {
+      this.signalLampVisibility = lampVisibility;
+      this.setDepartureSignalAspect(this.signalAspect);
     }
   }
 
@@ -447,8 +477,21 @@ export class MstsRouteScene {
     if (head.z < -1 || head.z > 1) return false;
     const screenX = rect.left + (head.x * 0.5 + 0.5) * rect.width;
     const screenY = rect.top + (-head.y * 0.5 + 0.5) * rect.height;
-    // 真实信号机保持其路线尺度；仅将手机命中范围扩展到 44 CSS 像素。
-    return Math.hypot(clientX - screenX, clientY - screenY) <= 44;
+    // 真实信号机保持其路线尺度；课堂触控将命中范围扩展到 70 CSS 像素。
+    return Math.hypot(clientX - screenX, clientY - screenY) <= 70;
+  }
+
+  getDepartureSignalScreenPosition() {
+    if (!this.departureSignal || !this.ready) return null;
+    const head = this.departureSignal.root.localToWorld(new THREE.Vector3(0, 0.70, 0));
+    head.project(this.camera);
+    const visible = head.z >= -1 && head.z <= 1 && Math.abs(head.x) <= 1.08 && Math.abs(head.y) <= 1.08;
+    return {
+      visible,
+      x: (head.x * 0.5 + 0.5) * 100,
+      y: (-head.y * 0.5 + 0.5) * 100,
+      remaining: ROUTE_CONTEXT.departureSignalDistance - this.distance,
+    };
   }
 
   getPathPosition(distance, target = new THREE.Vector3()) {
@@ -479,6 +522,7 @@ export class MstsRouteScene {
     this.speed = Math.max(0, Number(speed) || 0);
     this.view = view;
     this.canvas.classList.toggle('live', this.ready && (this.distance > 0.2 || view !== 'front' || signalVisible));
+    this.updateAtmosphere();
     this.applyCamera();
   }
 

@@ -1,8 +1,8 @@
-import { TrainSimulation } from './dynamics.js?rev=assessment-softflow-v1-20260925';
-import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=assessment-softflow-v1-20260925';
-import { MstsRouteScene } from './mstsRouteScene.js?rev=visible-dwarf-signal-v2-20260925';
+import { TrainSimulation } from './dynamics.js?rev=workflow-signal-lkj-v2-20260927';
+import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=workflow-signal-lkj-v2-20260927';
+import { MstsRouteScene } from './mstsRouteScene.js?rev=workflow-signal-lkj-v2-20260927';
 import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=assessment-softflow-v1-20260925';
-import { SCENARIOS, getScenario, scenarioAudioPath } from './credentialScenario.js';
+import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=workflow-signal-lkj-v2-20260927';
 
 const $ = (q) => document.querySelector(q);
 const sim = new TrainSimulation();
@@ -22,6 +22,13 @@ let signalRoot = null;
 let credentialRoot = null;
 let resultRoot = null;
 let resultShown = false;
+let signalTarget = null;
+const INITIAL_CHECKS = [
+  ['traction', '牵引手柄', '零位'], ['direction', '换向手柄', '中立位'],
+  ['autoBrake', '自动制动阀', '运转位'], ['independentBrake', '单独制动阀', '缓解位'],
+  ['parkingBrake', '停放制动', '施加'], ['panto', '受电弓', '降位'],
+  ['mainBreaker', '主断路器', '分位'], ['compressor', '空压机', '停止'],
+];
 const hornAudio = new Audio('./assets/audio/HXD1C-horn.wav');
 hornAudio.preload = 'auto'; hornAudio.loop = true;
 const lkjKeyAudio = new Audio('./assets/audio/lkj-key.wav');
@@ -64,6 +71,7 @@ function startDrag(id, el, event) {
 }
 function createFront() {
   overlay.replaceChildren(); elements={};
+  signalTarget=document.createElement('button');signalTarget.type='button';signalTarget.className='signal-trigger';signalTarget.setAttribute('aria-label','观察地面出站信号机');signalTarget.textContent='观察出站信号';signalTarget.addEventListener('click',(event)=>{event.stopPropagation();openSignalInspection();});overlay.append(signalTarget);
   elements.auto=makeSprite('auto-brake','HXD1C_DZ.png',35,341,45,60,4,3,'自动制动阀（拖动）');
   elements.independent=makeSprite('independent-brake','HXD1C_XZ.png',138,341,35,60,4,3,'单独制动阀（拖动）');
   elements.traction=makeSprite('traction','HXD1C_GL.png',464,345,46,81,2,8,'牵引/电制动手柄（拖动）');
@@ -148,6 +156,7 @@ function playLkjKey(){try{lkjKeyAudio.currentTime=0;lkjKeyAudio.play().catch(()=
 function flashLkj(message){lkjNotice=message;renderLkj();const screen=lkjRoot?.querySelector('.lkj-screen');screen?.classList.add('error');setTimeout(()=>{if(lkjNotice===message){lkjNotice='';renderLkj();}},900);}
 function handleLkjKey(id){
   playLkjKey();navigator.vibrate?.(12);
+  if(sim.state.lkjConfirmed&&id==='digit-7'){sim.command('lkj-start');renderLkj();return;}
   if(sim.state.lkjConfirmed){if(id==='query')lkjPhase='review';else if(lkjPhase==='review'&&(id==='left'||id==='relief'||id==='right'))lkjPhase='done';renderLkj();return;}
   if(lkjPhase==='boot'){if(id==='query'||id==='right'){lkjPhase='edit';lkjFieldIndex=0;renderLkj();}else flashLkj('请按【查询】进入参数设定');return;}
   if(lkjPhase==='edit'){
@@ -164,7 +173,7 @@ function handleLkjKey(id){
   if(lkjPhase==='review'){if(id==='left'||id==='up'||id==='relief'){lkjPhase='edit';renderLkj();return;}if(id==='right'||id==='query'){lkjPhase='reveal';lkjNoticeIndex=0;renderLkj();return;}flashLkj('按【→】进入揭示核对');return;}
   if(lkjPhase==='reveal'){
     if(id==='left'||id==='relief'){lkjPhase='review';renderLkj();return;}
-    if(id==='right'||id==='query'||id==='digit-7'){
+    if(id==='right'||id==='query'){
       if(lkjNoticeIndex<RUNNING_NOTICES.length-1){lkjNoticeIndex+=1;renderLkj();return;}
       if(command('lkj-confirm',lkjDraft)){lkjPhase='done';renderLkj();}return;
     }
@@ -173,7 +182,14 @@ function handleLkjKey(id){
 }
 function renderLkj(){
   if(!lkjRoot)return;const screen=lkjRoot.querySelector('.lkj-screen');
-  if(sim.state.lkjConfirmed&&lkjPhase!=='review'){screen.innerHTML=`<b>监控状态</b><span>车次 ${sim.state.lkjData?.trainNo||'—'}　揭示已确认</span><strong class="lkj-ok">LKJ 监控投入</strong><span class="lkj-help">按【查询】查看已设参数</span>`;return;}
+  if(sim.state.lkjConfirmed&&lkjPhase!=='review'){
+    const start=sim.state.lkjStartCorrect;
+    const error=sim.state.lkjStartError;
+    const remaining=Math.round(ROUTE_CONTEXT.departureSignalDistance-sim.state.distance);
+    const status=start?'LKJ 正常监控':error==='missed'||error==='late'?'开车对标错误已记录':'开车对标待执行';
+    const detail=start?'已在规定对标点按压【开车／7】键。':error==='stationary'?'列车尚未起动，不能开车对标。':error==='early'?`距开车对标点约 ${Math.max(0,remaining)} m。`:error==='late'||error==='missed'?'已越过对标点，本项按错误记录。':`列车起动后，在出站信号机对标点按压【开车／7】键。`;
+    screen.innerHTML=`<b>监控状态</b><span>车次 ${sim.state.lkjData?.trainNo||'—'}　揭示已确认</span><strong class="${start?'lkj-ok':error?'lkj-start-error':'lkj-start-ready'}">${status}</strong><span class="lkj-help">${detail}<br>按【查询】查看已设参数</span>`;return;
+  }
   if(lkjPhase==='done'&&sim.state.lkjAttempted){screen.innerHTML=`<b>参数核对记录</b><span>本次输入存在 ${sim.state.lkjErrors.length} 项不一致</span><strong>考评已记录，允许继续后续作业</strong><span class="lkj-help">本项将在成绩单中按实际正确性计分；按【查询】可重新输入。</span>`;return;}
   if(lkjPhase==='boot'){screen.innerHTML='<b>LKJ2000</b><span>设备自检正常</span><strong>按【查询】进入参数设定</strong><span class="lkj-help">使用显示器下方实体键操作</span>';return;}
   if(lkjPhase==='edit'){
@@ -200,11 +216,13 @@ function renderSignalInspection(state){
   if(!signalRoot)return;const aspect=SIGNAL_ASPECTS[state.signalAspect];const lit={green:['green'],greenYellow:['greenLower','yellow'],yellow:['yellow'],red:['red']}[state.signalAspect]||[];
   signalRoot.querySelectorAll('[data-dwarf-lamp]').forEach((lamp)=>lamp.classList.toggle('lit',lit.includes(lamp.dataset.dwarfLamp)));
   const scenario=getScenario(state.scenarioId);
+  const weatherUnreadable=scenario.id==='weather'&&state.distance<ROUTE_CONTEXT.departureSignalDistance-ROUTE_CONTEXT.weatherSignalClearDistance;
   const weatherAwaiting=scenario.id==='weather'&&state.credentialStage==='confirm-ground-signal';
   const recorded=state.signalObserved&&state.trainingMode==='assessment'&&!state.signalMeaningCorrect;
-  signalRoot.querySelector('[data-signal-question]').textContent=recorded?`已记录错误：所选${SIGNAL_ASPECTS[state.signalAnswer]?.label||'未知'}`:state.signalObserved&&state.signalMeaningCorrect?`已确认：${aspect.label}`:weatherAwaiting?'确认地面信号是否与机车信号一致':'请选择所见信号';
-  signalRoot.querySelector('[data-signal-meaning]').textContent=recorded?`实际显示为${aspect.label}；考评流程继续，本项按实际正确性计分。`:state.signalObserved&&state.signalMeaningCorrect?aspect.meaning:weatherAwaiting?'不一致时必须立即停车。':'正常场景须先接收车站联控，再确认出站信号。';
-  for(const b of signalRoot.querySelectorAll('[data-signal-answer]'))b.classList.toggle('selected',b.dataset.signalAnswer===state.signalAnswer&&state.signalObserved);
+  signalRoot.classList.toggle('weather-unreadable',weatherUnreadable);
+  signalRoot.querySelector('[data-signal-question]').textContent=weatherUnreadable?'地面信号暂无法辨认':recorded?`已记录错误：所选${SIGNAL_ASPECTS[state.signalAnswer]?.label||'未知'}`:state.signalObserved&&state.signalMeaningCorrect?`已确认：${aspect.label}`:weatherAwaiting?'确认地面信号是否与机车信号一致':'请选择所见信号';
+  signalRoot.querySelector('[data-signal-meaning]').textContent=weatherUnreadable?`当前距出站信号机约 ${Math.ceil(ROUTE_CONTEXT.departureSignalDistance-state.distance)} m；应按机车信号低速运行，接近后再确认地面显示。`:recorded?`实际显示为${aspect.label}；考评流程继续，本项按实际正确性计分。`:state.signalObserved&&state.signalMeaningCorrect?aspect.meaning:weatherAwaiting?'不一致时必须立即停车。':'正常场景须先接收车站联控，再确认出站信号。';
+  for(const b of signalRoot.querySelectorAll('[data-signal-answer]')){b.classList.toggle('selected',b.dataset.signalAnswer===state.signalAnswer&&state.signalObserved);b.disabled=weatherUnreadable;}
 }
 function openSignalInspection(){if(!signalRoot)buildSignalInspection();closeLkj();closeSwitchPanel();closeCredentialModal();signalRoot.classList.add('open');signalRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderSignalInspection(sim.state);}
 function closeSignalInspection(){if(!signalRoot)return;signalRoot.classList.remove('open');signalRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
@@ -264,16 +282,26 @@ function renderCredentialModal(state){
 }
 function buildTrainingControls(){
   const root=$('#training-controls');if(!root)return;
-  root.innerHTML=`<div class="training-row scenario-row">${Object.values(SCENARIOS).map((scenario)=>`<button type="button" data-scenario="${scenario.id}">${scenario.shortLabel}</button>`).join('')}</div><button type="button" class="credential-entry" data-credential-entry>进入凭证确认台</button><div class="training-row"><button type="button" data-training="initial">完成设备初始位置核对</button></div><p class="initial-check-state" data-initial-state>请点击各设备旁的名称，逐项核对初始位置。</p><div class="training-row mode-row"><button type="button" data-mode="teaching">教学模式</button><button type="button" data-mode="assessment">考评模式</button></div><p class="training-state" data-training-state></p>`;
+  root.innerHTML=`<div class="training-row mode-row"><button type="button" data-mode="teaching">教学模式</button><button type="button" data-mode="assessment">考评模式</button></div><div class="training-row scenario-row">${Object.values(SCENARIOS).map((scenario)=>`<button type="button" data-scenario="${scenario.id}">${scenario.shortLabel}</button>`).join('')}</div><button type="button" class="credential-entry" data-credential-entry>进入凭证确认台</button><p class="initial-check-state" data-initial-state>请在驾驶台逐项核对初始位置。</p><div class="initial-check-grid" data-initial-grid>${INITIAL_CHECKS.map(([key,label,target])=>`<button type="button" class="initial-check-card pending" data-initial-card="${key}"><b>${label}</b><span>${target} · 未核对</span></button>`).join('')}</div><div class="training-row"><button type="button" data-training="initial">提交初始位置核对</button></div><p class="training-state" data-training-state></p>`;
   root.querySelector('[data-training="initial"]').addEventListener('click',()=>command('initial-confirm'));
   root.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>command('training-mode',b.dataset.mode)));
   root.querySelectorAll('[data-scenario]').forEach(b=>b.addEventListener('click',()=>command('scenario-select',b.dataset.scenario)));
+  root.querySelectorAll('[data-initial-card]').forEach((card)=>card.addEventListener('click',()=>focusInitialCheck(card.dataset.initialCard)));
   root.querySelector('[data-credential-entry]').addEventListener('click',openCredentialModal);
   syncTrainingControls(sim.state);
 }
+function focusInitialCheck(key){
+  const item=INITIAL_CHECKS.find(([id])=>id===key);if(!item)return;
+  const [,,target]=item;
+  const direct={traction:elements.tractionPosition,direction:elements.directionPosition,autoBrake:elements.autoPosition,independentBrake:elements.independentPosition,parkingBrake:elements.parkingApply};
+  if(direct[key]){direct[key].focus?.();direct[key].animate?.([{outlineColor:'#75e9ff'},{outlineColor:'#75e9ff'},{outlineColor:'transparent'}],{duration:900});}
+  else if(['panto','mainBreaker','compressor'].includes(key)){openSwitchPanel();}
+  $('#hint').textContent=`请在驾驶台核对“${item[1]}”是否处于${target}，核对正确后该方框会变绿。`;
+}
 function syncTrainingControls(state){
   const root=$('#training-controls');if(!root)return;const initialButton=root.querySelector('[data-training="initial"]');initialButton.classList.toggle('active',state.initialConfirmed);
-  const initialKeys=['traction','direction','autoBrake','independentBrake','parkingBrake','panto','mainBreaker','compressor'];const checked=initialKeys.filter((key)=>state.initialChecks?.[key]).length;initialButton.disabled=state.trainingMode==='teaching'&&!state.initialConfirmed&&checked<initialKeys.length;root.querySelector('[data-initial-state]').textContent=state.initialConfirmed?'设备初始位置已完成核对。':state.trainingMode==='assessment'&&state.initialAttempted?`初始位置核对已提交：正确 ${checked}/${initialKeys.length}，未完成项已记录至成绩单。`:`初始位置已核对 ${checked}/${initialKeys.length}：请点击手柄名称、红色停放制动按钮及板钮中部完成核对。`;
+  const checked=INITIAL_CHECKS.filter(([key])=>state.initialChecks?.[key]).length;initialButton.disabled=state.trainingMode==='teaching'&&!state.initialConfirmed&&checked<INITIAL_CHECKS.length;root.querySelector('[data-initial-state]').textContent=state.initialConfirmed?'8项设备初始位置均已完成核对。':state.trainingMode==='assessment'&&state.initialAttempted?`初始位置核对已提交：已核对 ${checked}/${INITIAL_CHECKS.length}，结果将在本次成绩中显示。`:`初始位置已核对 ${checked}/${INITIAL_CHECKS.length}：点击方框可定位设备，实际在驾驶台完成核对。`;
+  for(const [key,label,target] of INITIAL_CHECKS){const card=root.querySelector(`[data-initial-card="${key}"]`);if(!card)continue;const checkedNow=Boolean(state.initialChecks?.[key]);const correct=sim.initialCheckIsCorrect(key);card.classList.remove('pending','current','done','warning');if(checkedNow&&correct){card.classList.add('done');card.querySelector('span').textContent=`${target} · 已核对`;}else if(state.trainingMode==='teaching'&&!correct){card.classList.add('warning');card.querySelector('span').textContent=`${target} · 请调整`;}else if(checked===INITIAL_CHECKS.length&&state.trainingMode==='teaching'){card.classList.add('current');card.querySelector('span').textContent=`${target} · 待复核`;}else{card.classList.add('pending');card.querySelector('span').textContent=state.trainingMode==='assessment'&&checkedNow?`${target} · 已操作`:`${target} · 未核对`;}}
   root.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===state.trainingMode));
   root.querySelectorAll('[data-scenario]').forEach(b=>b.classList.toggle('active',b.dataset.scenario===state.scenarioId&&state.scenarioSelected));
   root.querySelector('[data-credential-entry]').disabled=!state.scenarioSelected;
@@ -328,10 +356,26 @@ function syncSwitchPanel(state){
 }
 function bindDrag() { addEventListener('pointermove',(event)=>{ if(!activeDrag||(activeDrag.pointerId!==undefined&&event.pointerId!==activeDrag.pointerId))return; event.preventDefault(); const d=activeDrag; const delta=Math.round((d.startY-event.clientY)/d.pixelsPerStep); if(d.id==='traction')command('traction',Math.max(-8,Math.min(7,d.start+delta))); else command(d.id==='auto'?'auto-brake':'independent-brake',Math.max(0,Math.min(5,d.start+delta))); },{passive:false}); addEventListener('pointerup',(event)=>{if(!activeDrag||activeDrag.pointerId===event.pointerId)activeDrag=null}); addEventListener('pointercancel',(event)=>{if(!activeDrag||activeDrag.pointerId===event.pointerId)activeDrag=null}); }
 function activeState(id,state) { return Boolean(state[id==='panto'?'panto':id==='main-breaker'?'mainBreaker':id==='control-power'?'powerOn':id==='parking'?'parkingBrake':id==='headlight'?'headlight':id==='compressor'?'compressor':id==='authority'?'authority':id==='horn'?'hornActive':id==='lkj'?'lkjAttempted':id==='reset'?'vigilanceAcknowledged':false]); }
+function syncSignalTarget(state){
+  if(!signalTarget)return;
+  const point=routeScene.getDepartureSignalScreenPosition();
+  // 真实信号实体的投影不在挡风玻璃可视区时，使用同一实体位置的教学观察标记兜底；
+  // 它不改变灯态和判分，仅保证手机端能定位到需观察的信号机。
+  const anchor=point?.visible?point:{x:61,y:28};
+  const visible=selectedView==='front'&&state.distance<=ROUTE_CONTEXT.departureSignalDistance+35;
+  signalTarget.classList.toggle('visible',Boolean(visible));
+  if(!visible)return;
+  const fogged=state.scenarioId==='weather'&&state.distance<ROUTE_CONTEXT.departureSignalDistance-ROUTE_CONTEXT.weatherSignalClearDistance;
+  signalTarget.classList.toggle('fogged',fogged);signalTarget.classList.toggle('aspect-red',state.signalAspect==='red');
+  signalTarget.style.left=`${anchor.x}%`;signalTarget.style.top=`${anchor.y}%`;
+  signalTarget.textContent=fogged?'雾中地面信号':'观察出站信号';
+}
 function render(state,message='') {
+  routeScene.setTrainingScenario(state.scenarioId);
   routeScene.setDepartureSignalAspect(state.signalAspect);
   // 线路及地面实体信号机从进入驾驶台起就可见；不得再依赖 LKJ 答对后才显示。
   routeScene.update(state.distance,state.speed,selectedView,true);
+  syncSignalTarget(state);
   if(selectedView==='front') {
     frame(elements.auto,[0,1,2,9,10,11][state.autoBrake],4,3); frame(elements.independent,Math.min(11,state.independentBrake),4,3); frame(elements.traction,tractionFrame(state.traction),2,8); frame(elements.direction,state.direction==='R'?0:state.direction==='N'?1:2,3,1);
     for(const [id] of keys) elements[id]?.classList.toggle('on',activeState(id,state));
@@ -350,11 +394,21 @@ function render(state,message='') {
   syncPowerCabinet(state);
   renderSignalInspection(state);renderCredentialModal(state);syncTrainingControls(state);
   if(!procedureState(state).done||state.trainingMode!=='assessment')resultShown=false;
-  const p=procedureState(state); $('#procedure').innerHTML=PROCEDURE.map(([n],i)=>`<li class="${p.complete[i]?'done':i===p.current?'active':''}">${n}</li>`).join(''); const score=scoreRun(state); const aspect=SIGNAL_ASPECTS[state.signalAspect];const scenario=getScenario(state.scenarioId); $('#status').innerHTML=`<strong>状态：</strong>${p.done?'训练完成':'第 '+(p.current+1)+' 步'}<br>场景 ${state.scenarioSelected?scenario.label:'未选择'} · 凭证 ${state.scenarioSelected?scenario.credential:'—'}<br>总风 ${state.mainRes.toFixed(0)} kPa · 制动缸 ${state.brakeCyl.toFixed(0)} kPa<br>地面信号 ${aspect.label}${state.authority?' · 行车凭证已确认':''}<br>速度 ${state.speed.toFixed(1)} km/h · 当前得分 ${score.score}${score.deductions?` · 扣分 ${score.deductions}`:''}`; if(message)$('#hint').textContent=message;if(p.done)showResultReport(state);
+  const p=procedureState(state); $('#procedure').innerHTML=PROCEDURE.map(([n],i)=>`<li class="${p.complete[i]?'done':i===p.current?'active':''}">${n}</li>`).join(''); const score=scoreRun(state); const aspect=SIGNAL_ASPECTS[state.signalAspect];const scenario=getScenario(state.scenarioId); $('#status').innerHTML=`<strong>状态：</strong>${p.done?'训练完成':'第 '+(p.current+1)+' 步'}<br>场景 ${state.scenarioSelected?scenario.label:'未选择'} · 凭证 ${state.scenarioSelected?scenario.credential:'—'}<br>总风 ${state.mainRes.toFixed(0)} kPa · 制动缸 ${state.brakeCyl.toFixed(0)} kPa<br>地面信号 ${aspect.label}${state.authority?' · 行车凭证已确认':''}<br>LKJ ${state.lkjStartCorrect?'已开车对标':state.lkjStartAttempted?'开车对标待复核':'开车对标待执行'}<br>速度 ${state.speed.toFixed(1)} km/h · 当前得分 ${score.score}${score.deductions?` · 扣分 ${score.deductions}`:''}`; const workflowProgress=$('[data-workflow-progress]');if(workflowProgress)workflowProgress.textContent=`${p.complete.filter(Boolean).length}/${PROCEDURE.length}`; if(message)$('#hint').textContent=message;if(p.done)showResultReport(state);
 }
 function stopHorn(event){if(hornPointerId===null)return;if(event?.pointerId!==undefined&&event.pointerId!==hornPointerId)return;hornPointerId=null;hornAudio.pause();hornAudio.currentTime=0;if(sim.state.hornActive)command('horn-stop');elements.hornButton?.classList.remove('pressed');}
 function buildKeys(){if(!debugMode)return;document.body.classList.add('debug-mode');const root=$('#keys');keys.forEach(([id,name])=>{const b=document.createElement('button');b.dataset.id=id;b.textContent=name;b.addEventListener('click',()=>command(id));root.append(b);});}
 function setView(view){closeDevicePanels();selectedView=view;const cab=$('#cab');cab.src=`./assets/archive-cabview/${views[view]}`;cab.classList.toggle('side-view',view!=='front');routeScene.setView(view);document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));if(view==='front')createFront();else overlay.replaceChildren();render(sim.state);}
+function setWorkflowDrawer(open){
+  const drawer=$('#workflow-drawer');const scrim=$('#workflow-scrim');const trigger=$('#workflow-toggle');if(!drawer||!scrim||!trigger)return;
+  drawer.classList.toggle('open',open);scrim.classList.toggle('open',open);trigger.setAttribute('aria-expanded',String(open));document.body.classList.toggle('workflow-drawer-open',open);
+}
+function bindWorkflowDrawer(){
+  $('#workflow-toggle')?.addEventListener('click',()=>setWorkflowDrawer(!$('#workflow-drawer')?.classList.contains('open')));
+  $('#workflow-close')?.addEventListener('click',()=>setWorkflowDrawer(false));
+  $('#workflow-scrim')?.addEventListener('click',()=>setWorkflowDrawer(false));
+  addEventListener('keydown',(event)=>{if(event.key==='Escape')setWorkflowDrawer(false);});
+}
 const mobileLike=matchMedia('(pointer: coarse)').matches||navigator.maxTouchPoints>0||/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 if(mobileLike)document.body.classList.add('mobile-controls-enabled');
 async function enterImmersive(){
@@ -377,4 +431,4 @@ addEventListener('orientationchange',()=>{closeDevicePanels();setTimeout(()=>rou
 window.visualViewport?.addEventListener('resize',()=>routeScene.resize());
 addEventListener('pointerup',stopHorn,true);addEventListener('pointercancel',stopHorn,true);addEventListener('blur',()=>stopHorn());addEventListener('pagehide',()=>stopHorn());document.addEventListener('visibilitychange',()=>{if(document.hidden)stopHorn();});
 $('#stage').addEventListener('click',(event)=>{if(selectedView!=='front'||document.body.classList.contains('device-panel-active')||document.body.classList.contains('switch-panel-active'))return;if(routeScene.hitTestDepartureSignal(event.clientX,event.clientY))openSignalInspection();});
-document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildLkj();buildTrainingControls();buildKeys();bindDrag();setView('front');sim.onChange(render);let last=performance.now();function loop(now){sim.tick(Math.min(.05,(now-last)/1000));routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);
+document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildLkj();buildTrainingControls();buildKeys();bindDrag();bindWorkflowDrawer();setView('front');sim.onChange(render);let last=performance.now();function loop(now){sim.tick(Math.min(.05,(now-last)/1000));routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);

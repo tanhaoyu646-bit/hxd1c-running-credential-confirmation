@@ -1,5 +1,5 @@
 import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=assessment-softflow-v1-20260925';
-import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js';
+import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=workflow-signal-lkj-v2-20260927';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -24,6 +24,7 @@ export class TrainSimulation {
       controlPowerOutput: true, parkingPower: true, output24V: true, powerOn: true,
       initialConfirmed: false, initialAttempted: false,
       lkjConfirmed: false, lkjAttempted: false, lkjCorrect: false, lkjErrors: [], lkjData: null,
+      lkjStartAttempted: false, lkjStartCorrect: false, lkjStartError: '', lkjStartDistance: null,
       panto: false, mainBreaker: false, compressor: false,
       parkingBrake: true, authority: false, trainingMode: 'teaching', signalAspect: 'green', signalObserved: false, signalAnswer: null,
       signalMeaningCorrect: false, handSignalRequired: false, handSignalConfirmed: false,
@@ -274,6 +275,7 @@ export class TrainSimulation {
       s.lkjErrors = incorrect;
       s.lkjCorrect = incorrect.length === 0;
       s.lkjConfirmed = s.lkjCorrect;
+      s.lkjStartAttempted = false; s.lkjStartCorrect = false; s.lkjStartError = ''; s.lkjStartDistance = null;
       this.syncAuthority();
       if (!s.lkjCorrect) {
         if (this.isAssessment()) {
@@ -282,9 +284,29 @@ export class TrainSimulation {
         }
         return this.reject(missing.length ? 'LKJ 参数不完整，不能确认。' : 'LKJ 参数与本次课堂训练任务不一致，请复核后重新输入。');
       }
-      this.emit('LKJ 参数已输入，运行揭示已查询确认。'); return true;
+      this.emit('LKJ 参数已输入，运行揭示已查询确认；列车起动后须在开车对标点按压【开车／7】键。'); return true;
     }
-    if (id === 'lkj') { s.lkjData = { debug: true }; s.lkjAttempted = true; s.lkjCorrect = true; s.lkjConfirmed = true; this.syncAuthority(); this.emit('调试快捷操作：LKJ 已确认。'); return true; }
+    if (id === 'lkj-start') {
+      if (!s.lkjConfirmed) return this.reject('请先完成 LKJ 参数和运行揭示核对。');
+      s.lkjStartAttempted = true;
+      s.lkjStartDistance = s.distance;
+      const delta = s.distance - ROUTE_CONTEXT.departureSignalDistance;
+      if (s.speed < 1) {
+        s.lkjStartError = 'stationary';
+        return this.reject('列车尚未起动；应在起动后到达开车对标点时按压【开车／7】键。');
+      }
+      if (Math.abs(delta) > ROUTE_CONTEXT.lkjStartTolerance) {
+        s.lkjStartError = delta < 0 ? 'early' : 'late';
+        return this.reject(delta < 0
+          ? `尚未到达 LKJ 开车对标点（距规定点 ${Math.ceil(Math.abs(delta))} m）。`
+          : `已越过 LKJ 开车对标点 ${Math.ceil(delta)} m，本次对标错误已记录。`);
+      }
+      s.lkjStartCorrect = true;
+      s.lkjStartError = '';
+      this.emit('LKJ 开车对标完成，装置已进入正常监控状态。');
+      return true;
+    }
+    if (id === 'lkj') { s.lkjData = { debug: true }; s.lkjAttempted = true; s.lkjCorrect = true; s.lkjConfirmed = true; s.lkjStartAttempted = false; s.lkjStartCorrect = false; this.syncAuthority(); this.emit('调试快捷操作：LKJ 已确认。'); return true; }
     if (id === 'panto') { const next=value===undefined?!s.panto:Boolean(value); if (next && !this.lkjWorkflowReady()) return this.reject('请先完成 LKJ 参数输入与运行揭示核对。'); this.invalidateInitialCheck('panto'); s.panto = next; if (!s.panto) s.mainBreaker = false; this.emit(s.panto ? '受电弓已升起，正在建立网压。' : '受电弓已降下。'); return true; }
     if (id === 'main-breaker') { const next=value===undefined?!s.mainBreaker:Boolean(value); if (next && (!s.panto || s.netVoltage < 19)) return this.reject('网压未建立，禁止闭合主断路器。'); this.invalidateInitialCheck('mainBreaker'); s.mainBreaker = next; this.emit(s.mainBreaker ? '主断路器已闭合。' : '主断路器已断开。'); return true; }
     if (id === 'compressor') { const next=value===undefined?!s.compressor:Boolean(value); if (next && !s.mainBreaker) return this.reject('主断路器未闭合，空压机不能投入。'); this.invalidateInitialCheck('compressor'); s.compressor = next; this.emit(s.compressor ? '空气压缩机已投入。' : '空气压缩机已停止。'); return true; }
@@ -367,6 +389,13 @@ export class TrainSimulation {
     if (!s.signalPassed && s.distance >= ROUTE_CONTEXT.departureSignalDistance) {
       s.signalPassed = true;
       this.emit('列车已越过地面出站信号机。');
+    }
+    if (s.lkjConfirmed && !s.lkjStartAttempted && s.speed >= 1 && s.distance > ROUTE_CONTEXT.departureSignalDistance + ROUTE_CONTEXT.lkjStartTolerance) {
+      s.lkjStartAttempted = true;
+      s.lkjStartCorrect = false;
+      s.lkjStartError = 'missed';
+      s.lkjStartDistance = s.distance;
+      this.reject('已越过 LKJ 开车对标点，未按压【开车／7】键；本项错误已记录。');
     }
     if (s.signalPassed && !s.completed && s.distance >= ROUTE_CONTEXT.trainingEndDistance && s.speed >= 5) {
       s.completed = true;

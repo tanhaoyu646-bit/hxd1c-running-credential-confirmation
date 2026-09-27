@@ -69,8 +69,14 @@ export const ROUTE_CONTEXT = {
   direction: '七斗冲方向',
   trainNo: '2026次',
   locomotive: 'HXD1C',
-  departureSignalDistance: 570,
-  trainingEndDistance: 870,
+  // 与游戏路线中选定的株洲站 1 道出站信号机投影里程保持同一数据源。
+  departureSignalDistance: 549.58,
+  departureSignalSourceUid: 172,
+  trainingEndDistance: 849.58,
+  // 以下为课堂网页的可操作容差，并非现场规章规定的距离。
+  weatherSignalClearDistance: 50,
+  weatherSignalApproachDistance: 150,
+  lkjStartTolerance: 10,
 };
 
 export function getScenario(id) {
