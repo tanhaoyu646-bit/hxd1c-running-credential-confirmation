@@ -399,17 +399,26 @@ function render(state,message='') {
 function stopHorn(event){if(hornPointerId===null)return;if(event?.pointerId!==undefined&&event.pointerId!==hornPointerId)return;hornPointerId=null;hornAudio.pause();hornAudio.currentTime=0;if(sim.state.hornActive)command('horn-stop');elements.hornButton?.classList.remove('pressed');}
 function buildKeys(){if(!debugMode)return;document.body.classList.add('debug-mode');const root=$('#keys');keys.forEach(([id,name])=>{const b=document.createElement('button');b.dataset.id=id;b.textContent=name;b.addEventListener('click',()=>command(id));root.append(b);});}
 function setView(view){closeDevicePanels();selectedView=view;const cab=$('#cab');cab.src=`./assets/archive-cabview/${views[view]}`;cab.classList.toggle('side-view',view!=='front');routeScene.setView(view);document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));if(view==='front')createFront();else overlay.replaceChildren();render(sim.state);}
-function setWorkflowDrawer(open){
-  const drawer=$('#workflow-drawer');const scrim=$('#workflow-scrim');const trigger=$('#workflow-toggle');if(!drawer||!scrim||!trigger)return;
-  drawer.classList.toggle('open',open);scrim.classList.toggle('open',open);trigger.setAttribute('aria-expanded',String(open));document.body.classList.toggle('workflow-drawer-open',open);
+function setControlDrawer(targetId=null){
+  const drawers=['workflow','training'];
+  for(const id of drawers){
+    const open=id===targetId;
+    $(`#${id}-drawer`)?.classList.toggle('open',open);
+    $(`#${id}-toggle`)?.setAttribute('aria-expanded',String(open));
+  }
+  const anyOpen=drawers.includes(targetId);
+  $('#workflow-scrim')?.classList.toggle('open',anyOpen);
+  document.body.classList.toggle('control-drawer-open',anyOpen);
 }
-function bindWorkflowDrawer(){
-  $('#workflow-toggle')?.addEventListener('click',()=>setWorkflowDrawer(!$('#workflow-drawer')?.classList.contains('open')));
-  $('#workflow-close')?.addEventListener('click',()=>setWorkflowDrawer(false));
-  $('#workflow-scrim')?.addEventListener('click',()=>setWorkflowDrawer(false));
-  addEventListener('keydown',(event)=>{if(event.key==='Escape')setWorkflowDrawer(false);});
+function bindControlDrawers(){
+  for(const id of ['workflow','training']){
+    $(`#${id}-toggle`)?.addEventListener('click',()=>setControlDrawer($(`#${id}-drawer`)?.classList.contains('open')?null:id));
+    $(`#${id}-close`)?.addEventListener('click',()=>setControlDrawer());
+  }
+  $('#workflow-scrim')?.addEventListener('click',()=>setControlDrawer());
+  addEventListener('keydown',(event)=>{if(event.key==='Escape')setControlDrawer();});
 }
-const mobileLike=matchMedia('(pointer: coarse)').matches||navigator.maxTouchPoints>0||/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const mobileLike=matchMedia('(pointer: coarse)').matches||matchMedia('(max-height:600px) and (orientation:landscape)').matches||navigator.maxTouchPoints>0||/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 if(mobileLike)document.body.classList.add('mobile-controls-enabled');
 async function enterImmersive(){
   document.documentElement.classList.add('immersive');
@@ -431,4 +440,4 @@ addEventListener('orientationchange',()=>{closeDevicePanels();setTimeout(()=>rou
 window.visualViewport?.addEventListener('resize',()=>routeScene.resize());
 addEventListener('pointerup',stopHorn,true);addEventListener('pointercancel',stopHorn,true);addEventListener('blur',()=>stopHorn());addEventListener('pagehide',()=>stopHorn());document.addEventListener('visibilitychange',()=>{if(document.hidden)stopHorn();});
 $('#stage').addEventListener('click',(event)=>{if(selectedView!=='front'||document.body.classList.contains('device-panel-active')||document.body.classList.contains('switch-panel-active'))return;if(routeScene.hitTestDepartureSignal(event.clientX,event.clientY))openSignalInspection();});
-document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildLkj();buildTrainingControls();buildKeys();bindDrag();bindWorkflowDrawer();setView('front');sim.onChange(render);let last=performance.now();function loop(now){sim.tick(Math.min(.05,(now-last)/1000));routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);
+document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildLkj();buildTrainingControls();buildKeys();bindDrag();bindControlDrawers();setView('front');sim.onChange(render);let last=performance.now();function loop(now){sim.tick(Math.min(.05,(now-last)/1000));routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);
