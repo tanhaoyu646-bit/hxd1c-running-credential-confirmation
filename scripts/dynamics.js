@@ -1,5 +1,5 @@
 import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=assessment-softflow-v1-20260925';
-import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=workflow-signal-lkj-v2-20260927';
+import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=signal-pair-start-v3-20260927';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const TRACTION_BRAKE_CYL_MAX = 15;
@@ -44,7 +44,7 @@ export class TrainSimulation {
       mainRes: 750, equalizingRes: 600, trainPipe: 600, brakeCyl: 0,
       initialChecks: Object.fromEntries(Object.keys(INITIAL_CHECK_LABELS).map((key) => [key, false])),
       netVoltage: 0, speed: 0, distance: 0, tractionForce: 0, brakeForce: 0,
-      brakeTested: false, releaseObserved: false, elapsed: 0,
+      brakeTested: false, releaseObserved: false, lowNotchStartConfirmed: false, elapsed: 0,
       rejected: 0, abrupt: 0, maxAcceleration: 0, maxJerk: 0, lastAcceleration: 0,
     };
     this.emit();
@@ -407,6 +407,12 @@ export class TrainSimulation {
     const acceleration = (s.tractionForce - s.brakeForce - resistance) / mass;
     const actual = s.speed <= 0 && acceleration < 0 ? 0 : acceleration;
     s.speed = clamp(s.speed + actual * dt * 3.6, 0, s.limitedStart ? 15 : 120); s.distance += s.speed / 3.6 * dt;
+    // 课堂中“低级位平稳起动”只需确认低级位下列车已经开始平稳滚动。
+    // 达到该状态后可按操纵需要逐级加力，不能把低级位误当作保持到 5 km/h 的限制。
+    if (!s.lowNotchStartConfirmed && s.traction >= 1 && s.traction <= 2 && s.speed >= 0.5) {
+      s.lowNotchStartConfirmed = true;
+      this.emit('列车已在低级位平稳起动；可根据速度变化逐级增大牵引。');
+    }
     s.maxAcceleration = Math.max(s.maxAcceleration, Math.abs(actual)); s.maxJerk = Math.max(s.maxJerk, Math.abs((actual - s.lastAcceleration) / Math.max(dt, .01))); s.lastAcceleration = actual;
     if (s.scenarioId === 'weather' && s.credentialStage === 'limited-start' && s.distance >= ROUTE_CONTEXT.departureSignalDistance - 50) {
       s.credentialStage = 'confirm-ground-signal';

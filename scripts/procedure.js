@@ -9,7 +9,8 @@ export const PROCEDURE = [
   ['确认本场景行车凭证、开车通知及发车手信号', s => s.credentialConfirmed && (!s.handSignalRequired || s.handSignalConfirmed) && (s.credentialCorrect || s.trainingMode === 'assessment'), 20, s => s.credentialCorrect && (!s.handSignalRequired || s.handSignalConfirmed)],
   ['开启前照灯并鸣笛', s => s.headlight && s.horn, 5],
   ['方向手柄置前进', s => s.direction === 'F', 3],
-  ['低级位平稳起动', s => s.speed >= 5 && s.traction > 0, 4],
+  // 低级位平稳起动的完成标志是列车已经平稳滚动，不能错误地要求低级位一直维持到 5 km/h。
+  ['低级位平稳起动', s => s.lowNotchStartConfirmed, 4],
   ['LKJ 开车对标', s => s.lkjStartCorrect || (s.trainingMode === 'assessment' && s.lkjStartAttempted), 5, s => s.lkjStartCorrect],
   ['越过出站信号机后稳定运行 300 m', s => s.completed, 3],
 ];

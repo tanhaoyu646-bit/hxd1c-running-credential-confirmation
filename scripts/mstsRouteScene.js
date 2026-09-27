@@ -1,5 +1,5 @@
 import * as THREE from '../lib/three/three.module.js';
-import { ROUTE_CONTEXT } from './credentialScenario.js?rev=workflow-signal-lkj-v2-20260927';
+import { ROUTE_CONTEXT } from './credentialScenario.js?rev=signal-pair-start-v3-20260927';
 
 const SOURCE_PATH = '../assets/route/jingguang/zhuzhou-13877-scene.json';
 const ROUTE_PATH = '../assets/route/jingguang/zhuzhou-1-southbound-path.json';
@@ -43,6 +43,7 @@ export class MstsRouteScene {
     this.scenarioId = 'normal';
     this.signalLampVisibility = 1;
     this.departureSignal = null;
+    this.neighborSignal = null;
     this.signalRaycaster = new THREE.Raycaster();
     this.signalPointer = new THREE.Vector2();
     this.materialCache = new Map();
@@ -378,12 +379,15 @@ export class MstsRouteScene {
   }
 
   buildSourceDepartureSignal(data) {
-    // 固定使用已核对的株洲站 1 道出站信号机，不能再以“最近信号机”猜测本股道对象。
-    const source = data.instances.find((instance) => instance.uid === ROUTE_CONTEXT.departureSignalSourceUid
-      && instance.type === 'SignalObj' && instance.shape === 'chuzhan.s');
-    const projection = source ? this.projectPointToPath(source.position) : null;
-    const selected = source && projection ? { instance: source, projection } : null;
-    if (!selected) {
+    // 固定使用已核对的株洲站 1 道出站信号机及其左侧邻线信号机，不能以“最近信号机”猜测对象。
+    const selectSignal = (uid) => {
+      const instance = data.instances.find((item) => item.uid === uid && item.type === 'SignalObj' && item.shape === 'chuzhan.s');
+      const projection = instance ? this.projectPointToPath(instance.position) : null;
+      return instance && projection ? { instance, projection } : null;
+    };
+    const departure = selectSignal(ROUTE_CONTEXT.departureSignalSourceUid);
+    const neighbor = selectSignal(ROUTE_CONTEXT.neighborSignalSourceUid);
+    if (!departure || !neighbor) {
       this.error = new Error('未找到株洲站 1 道已配置的矮型出站信号机。');
       return;
     }
@@ -391,11 +395,17 @@ export class MstsRouteScene {
     // 本体已由 buildRoute() 从游戏 shape 渲染；此处只叠加教学用四显示灯位。
     // 该路线的 chuzhan.s 不含可直接驱动的网页灯态，因此按 sigcfg.dat 的灯位
     // 坐标在同规格矮型出站信号机上叠加，不伪造为原路线联锁结果。
+    this.departureSignal = this.createSignalLightOverlay(departure, 'SOURCE_DWARF_DEPARTURE_SIGNAL_LIGHTS', true);
+    this.neighborSignal = this.createSignalLightOverlay(neighbor, 'SOURCE_DWARF_NEIGHBOR_SIGNAL_LIGHTS', false);
+    this.setDepartureSignalAspect(this.signalAspect);
+  }
+
+  createSignalLightOverlay(selected, name, isDepartureSignal) {
     const root = new THREE.Group();
-    root.name = 'SOURCE_DWARF_DEPARTURE_SIGNAL_LIGHTS';
+    root.name = name;
     root.position.fromArray(selected.instance.position);
     root.quaternion.fromArray(selected.instance.quaternion).normalize();
-    root.userData.isDepartureSignal = true;
+    root.userData.isDepartureSignal = isDepartureSignal;
     root.userData.sourceUid = selected.instance.uid;
     root.userData.sourceShape = selected.instance.shape;
     root.userData.alongDistance = selected.projection.alongDistance;
@@ -409,6 +419,7 @@ export class MstsRouteScene {
       green: [0.01, 0.911, 0.035],
     };
     const lamps = {};
+    const lampMeshes = [];
     for (const [name, position] of Object.entries(lampDefinitions)) {
       const material = new THREE.MeshBasicMaterial({ color: '#121617', transparent: true, opacity: 0.72, toneMapped: false });
       const lamp = new THREE.Mesh(lampGeometry, material);
@@ -416,15 +427,21 @@ export class MstsRouteScene {
       lamp.position.fromArray(position);
       root.add(lamp);
       lamps[name] = material;
+      lampMeshes.push(lamp);
     }
     this.routeRoot.add(root);
-    this.departureSignal = { root, lamps, projection: selected.projection };
-    this.setDepartureSignalAspect(this.signalAspect);
+    return { root, lamps, lampMeshes, projection: selected.projection };
   }
 
   setDepartureSignalAspect(aspect) {
     this.signalAspect = aspect || 'green';
-    if (!this.departureSignal) return;
+    this.applySignalAspect(this.departureSignal, this.signalAspect);
+    // 邻线信号机固定显示红灯，明确其不属于本列车运行进路。
+    this.applySignalAspect(this.neighborSignal, 'red');
+  }
+
+  applySignalAspect(signal, aspect) {
+    if (!signal) return;
     const active = {
       green: ['green'],
       greenYellow: ['greenLower', 'yellow'],
@@ -436,6 +453,17 @@ export class MstsRouteScene {
       const on = active.includes(name);
       material.color.set(on ? colors[name] : '#121617');
       material.opacity = on ? this.signalLampVisibility : Math.min(0.72, this.signalLampVisibility * 0.72);
+    }
+  }
+
+  updateSignalTeachingVisibility() {
+    for (const signal of [this.departureSignal, this.neighborSignal]) {
+      if (!signal) continue;
+      const head = signal.root.localToWorld(new THREE.Vector3(0, 0.70, 0));
+      const distance = this.camera.position.distanceTo(head);
+      // 实体本体保持游戏原比例；仅把点灯透镜适度放大，保证远距教学时可辨认。
+      const scale = THREE.MathUtils.clamp(distance / 48, 1, 12);
+      signal.lampMeshes.forEach((lamp) => lamp.scale.setScalar(scale));
     }
   }
 
@@ -472,6 +500,7 @@ export class MstsRouteScene {
     if (!this.departureSignal || !this.ready) return false;
     const rect = this.canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return false;
+    this.camera.updateMatrixWorld(true);
     const head = this.departureSignal.root.localToWorld(new THREE.Vector3(0, 0.70, 0));
     head.project(this.camera);
     if (head.z < -1 || head.z > 1) return false;
@@ -483,6 +512,7 @@ export class MstsRouteScene {
 
   getDepartureSignalScreenPosition() {
     if (!this.departureSignal || !this.ready) return null;
+    this.camera.updateMatrixWorld(true);
     const head = this.departureSignal.root.localToWorld(new THREE.Vector3(0, 0.70, 0));
     head.project(this.camera);
     const visible = head.z >= -1 && head.z <= 1 && Math.abs(head.x) <= 1.08 && Math.abs(head.y) <= 1.08;
@@ -524,6 +554,7 @@ export class MstsRouteScene {
     this.canvas.classList.toggle('live', this.ready && (this.distance > 0.2 || view !== 'front' || signalVisible));
     this.updateAtmosphere();
     this.applyCamera();
+    this.updateSignalTeachingVisibility();
   }
 
   applyCamera() {

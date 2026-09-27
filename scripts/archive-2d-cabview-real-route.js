@@ -1,8 +1,8 @@
-import { TrainSimulation } from './dynamics.js?rev=departure-hand-signal-v4-20260927';
-import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=departure-hand-signal-v4-20260927';
-import { MstsRouteScene } from './mstsRouteScene.js?rev=workflow-signal-lkj-v2-20260927';
+import { TrainSimulation } from './dynamics.js?rev=signal-pair-start-v3-20260927';
+import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=signal-pair-start-v3-20260927';
+import { MstsRouteScene } from './mstsRouteScene.js?rev=signal-pair-start-v3-20260927';
 import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=assessment-softflow-v1-20260925';
-import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=workflow-signal-lkj-v2-20260927';
+import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=signal-pair-start-v3-20260927';
 
 const $ = (q) => document.querySelector(q);
 const sim = new TrainSimulation();
@@ -363,15 +363,13 @@ function activeState(id,state) { return Boolean(state[id==='panto'?'panto':id===
 function syncSignalTarget(state){
   if(!signalTarget)return;
   const point=routeScene.getDepartureSignalScreenPosition();
-  // 真实信号实体的投影不在挡风玻璃可视区时，使用同一实体位置的教学观察标记兜底；
-  // 它不改变灯态和判分，仅保证手机端能定位到需观察的信号机。
-  const anchor=point?.visible?point:{x:61,y:28};
-  const visible=selectedView==='front'&&state.distance<=ROUTE_CONTEXT.departureSignalDistance+35;
+  // 观察按钮只允许锚定真实本线出站信号机，不能回退到站台上的固定坐标。
+  const visible=selectedView==='front'&&state.distance<=ROUTE_CONTEXT.departureSignalDistance+35&&Boolean(point?.visible);
   signalTarget.classList.toggle('visible',Boolean(visible));
   if(!visible)return;
   const fogged=state.scenarioId==='weather'&&state.distance<ROUTE_CONTEXT.departureSignalDistance-ROUTE_CONTEXT.weatherSignalClearDistance;
   signalTarget.classList.toggle('fogged',fogged);signalTarget.classList.toggle('aspect-red',state.signalAspect==='red');
-  signalTarget.style.left=`${anchor.x}%`;signalTarget.style.top=`${anchor.y}%`;
+  signalTarget.style.left=`${point.x}%`;signalTarget.style.top=`${point.y}%`;
   signalTarget.textContent=fogged?'雾中地面信号':'观察出站信号';
 }
 function syncHandSignalCard(state){
@@ -397,7 +395,7 @@ function render(state,message='') {
     // 临时缩小量程，否则同一压力会落在错误刻度。
     setNeedle(elements.speedNeedle,state.speed,158); setNeedle(elements.mainNeedle,state.mainRes,1600); setNeedle(elements.pipeNeedle,state.trainPipe,1000); setNeedle(elements.eqNeedle,state.equalizingRes,1600); setNeedle(elements.cylNeedle,state.brakeCyl,1600); setNeedle(elements.mainNeedle2,state.mainRes,1600); setNeedle(elements.pipeNeedle2,state.trainPipe,1600); setNeedle(elements.eqNeedle2,state.equalizingRes,1600); setNeedle(elements.cylNeedle2,state.brakeCyl,1600);
     const current=Math.max(0,state.traction)*105; elements.voltageBar.style.transform=`scaleY(${Math.max(.03,state.netVoltage/30)})`; elements.currentBars.forEach((bar,index)=>bar.style.transform=`scaleY(${Math.max(.02,Math.min(1,(current-index*22)/1000))})`);
-    elements.speedDigital.textContent=Math.round(state.speed); elements.limitDigital.textContent='30'; elements.clockDigital.textContent=new Date().toLocaleTimeString('zh-CN',{hour12:false});
+    elements.speedDigital.textContent=state.speed<10?state.speed.toFixed(1):Math.round(state.speed); elements.limitDigital.textContent='30'; elements.clockDigital.textContent=new Date().toLocaleTimeString('zh-CN',{hour12:false});
     const autoNames=['运转位','初制动位','常用制动Ⅱ','常用制动Ⅲ','常用制动Ⅳ','紧急位'];const independentNames=['缓解位','制动Ⅰ','制动Ⅱ','制动Ⅲ','制动Ⅳ','全制动位'];
     elements.autoPosition.querySelector('span').textContent=autoNames[state.autoBrake];elements.independentPosition.querySelector('span').textContent=independentNames[state.independentBrake];elements.directionPosition.querySelector('span').textContent=state.direction==='F'?'前进位':state.direction==='R'?'后退位':'中立位';elements.tractionPosition.querySelector('span').textContent=state.traction>0?`牵引 ${state.traction} 级`:state.traction<0?`电制动 ${Math.abs(state.traction)} 级`:'零位';
     frame(elements.pantoDisplay,state.panto?1:0,1,2); frame(elements.signal,SIGNAL_ASPECTS[state.signalAspect].frame,4,2);
@@ -408,7 +406,7 @@ function render(state,message='') {
   syncPowerCabinet(state);
   renderSignalInspection(state);renderCredentialModal(state);syncTrainingControls(state);
   if(!procedureState(state).done||state.trainingMode!=='assessment')resultShown=false;
-  const p=procedureState(state); $('#procedure').innerHTML=PROCEDURE.map(([n],i)=>`<li class="${p.complete[i]?'done':i===p.current?'active':''}">${n}</li>`).join(''); const score=scoreRun(state); const aspect=SIGNAL_ASPECTS[state.signalAspect];const scenario=getScenario(state.scenarioId); $('#status').innerHTML=`<strong>状态：</strong>${p.done?'训练完成':'第 '+(p.current+1)+' 步'}<br>场景 ${state.scenarioSelected?scenario.label:'未选择'} · 凭证 ${state.scenarioSelected?scenario.credential:'—'}<br>总风 ${state.mainRes.toFixed(0)} kPa · 制动缸 ${state.brakeCyl.toFixed(0)} kPa<br>地面信号 ${aspect.label}${state.authority?' · 行车凭证已确认':''}<br>LKJ ${state.lkjStartCorrect?'已开车对标':state.lkjStartAttempted?'开车对标待复核':'开车对标待执行'}<br>速度 ${state.speed.toFixed(1)} km/h · 当前得分 ${score.score}${score.deductions?` · 扣分 ${score.deductions}`:''}`; const workflowProgress=$('[data-workflow-progress]');if(workflowProgress)workflowProgress.textContent=`${p.complete.filter(Boolean).length}/${PROCEDURE.length}`; if(message)$('#hint').textContent=message;if(p.done)showResultReport(state);
+  const p=procedureState(state); $('#procedure').innerHTML=PROCEDURE.map(([n],i)=>`<li class="${p.complete[i]?'done':i===p.current?'active':''}">${n}</li>`).join(''); const score=scoreRun(state); const aspect=SIGNAL_ASPECTS[state.signalAspect];const scenario=getScenario(state.scenarioId); $('#status').innerHTML=`<strong>状态：</strong>${p.done?'训练完成':'第 '+(p.current+1)+' 步'}<br>场景 ${state.scenarioSelected?scenario.label:'未选择场景'} · 凭证 ${state.scenarioSelected?scenario.credential:'—'}<br>总风 ${state.mainRes.toFixed(0)} kPa · 制动缸 ${state.brakeCyl.toFixed(0)} kPa<br>地面信号 ${aspect.label}${state.authority?' · 行车凭证已确认':''}<br>LKJ ${state.lkjStartCorrect?'已开车对标':state.lkjStartAttempted?'开车对标待复核':'开车对标待执行'}<br>速度 ${state.speed.toFixed(1)} km/h · ${state.lowNotchStartConfirmed?'低级位起动已确认':'低级位起动中'} · 当前得分 ${score.score}${score.deductions?` · 扣分 ${score.deductions}`:''}`; const workflowProgress=$('[data-workflow-progress]');if(workflowProgress)workflowProgress.textContent=`${p.complete.filter(Boolean).length}/${PROCEDURE.length}`; if(message)$('#hint').textContent=message;if(p.done)showResultReport(state);
 }
 function stopHorn(event){if(hornPointerId===null)return;if(event?.pointerId!==undefined&&event.pointerId!==hornPointerId)return;hornPointerId=null;hornAudio.pause();hornAudio.currentTime=0;if(sim.state.hornActive)command('horn-stop');elements.hornButton?.classList.remove('pressed');}
 function buildKeys(){if(!debugMode)return;document.body.classList.add('debug-mode');const root=$('#keys');keys.forEach(([id,name])=>{const b=document.createElement('button');b.dataset.id=id;b.textContent=name;b.addEventListener('click',()=>command(id));root.append(b);});}
