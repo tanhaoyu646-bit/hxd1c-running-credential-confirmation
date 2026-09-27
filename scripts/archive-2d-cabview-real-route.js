@@ -1,6 +1,6 @@
 import { TrainSimulation } from './dynamics.js?rev=signal-pair-start-v3-20260927';
 import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=signal-pair-start-v3-20260927';
-import { MstsRouteScene } from './mstsRouteScene.js?rev=signal-pair-start-v3-20260927';
+import { MstsRouteScene } from './mstsRouteScene.js?rev=source-signal-v4-20260927';
 import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=assessment-softflow-v1-20260925';
 import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=signal-pair-start-v3-20260927';
 
@@ -369,7 +369,8 @@ function syncSignalTarget(state){
   if(!visible)return;
   const fogged=state.scenarioId==='weather'&&state.distance<ROUTE_CONTEXT.departureSignalDistance-ROUTE_CONTEXT.weatherSignalClearDistance;
   signalTarget.classList.toggle('fogged',fogged);signalTarget.classList.toggle('aspect-red',state.signalAspect==='red');
-  signalTarget.style.left=`${point.x}%`;signalTarget.style.top=`${point.y}%`;
+  // 标注向右错开，避免其引导线正好遮住只有数像素高的远距矮型信号机。
+  signalTarget.style.left=`${Math.min(88,point.x+8)}%`;signalTarget.style.top=`${point.y}%`;
   signalTarget.textContent=fogged?'雾中地面信号':'观察出站信号';
 }
 function syncHandSignalCard(state){

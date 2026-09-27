@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check scripts/dynamics.js && node --check scripts/procedure.js && node --check scripts/credentialScenario.js && node --check scripts/archive-2d-cabview-real-route.js"
+    "check": "node --check scripts/dynamics.js && node --check scripts/procedure.js && node --check scripts/credentialScenario.js && node --check scripts/mstsRouteScene.js && node --check scripts/archive-2d-cabview-real-route.js && node tools/validate-signal-assets.mjs"
   }
 }

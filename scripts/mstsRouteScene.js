@@ -1,9 +1,11 @@
 import * as THREE from '../lib/three/three.module.js';
-import { ROUTE_CONTEXT } from './credentialScenario.js?rev=signal-pair-start-v3-20260927';
+import { ROUTE_CONTEXT } from './credentialScenario.js?rev=source-signal-v4-20260927';
 
 const SOURCE_PATH = '../assets/route/jingguang/zhuzhou-13877-scene.json';
 const ROUTE_PATH = '../assets/route/jingguang/zhuzhou-1-southbound-path.json';
+const SIGNAL_ASSET_PATH = '../assets/route/jingguang/chuzhan-signal.json';
 const TEXTURE_PATH = '../assets/route/jingguang/textures/';
+const AVAILABLE_TEXTURES = new Set(['Sign.png']);
 const NEXT_STATION_DISTANCE = ROUTE_CONTEXT.departureSignalDistance;
 // 真实路线模型优先。程序化轨道仅保留作回退实验，默认不得覆盖游戏来源的轨道与站台。
 const ROUTE_RENDER_OPTIONS = Object.freeze({
@@ -75,18 +77,24 @@ export class MstsRouteScene {
 
   async load() {
     try {
-      const [sceneResponse, pathResponse] = await Promise.all([
+      const [sceneResponse, pathResponse, signalResponse] = await Promise.all([
         fetch(SOURCE_PATH, { cache: 'no-store' }),
         fetch(ROUTE_PATH, { cache: 'no-store' }),
+        fetch(SIGNAL_ASSET_PATH, { cache: 'no-store' }),
       ]);
       if (!sceneResponse.ok) throw new Error(`路线场景加载失败：HTTP ${sceneResponse.status}`);
       if (!pathResponse.ok) throw new Error(`轨道中心线加载失败：HTTP ${pathResponse.status}`);
-      const [sceneData, pathData] = await Promise.all([sceneResponse.json(), pathResponse.json()]);
+      if (!signalResponse.ok) throw new Error(`出站信号机模型加载失败：HTTP ${signalResponse.status}`);
+      const [sceneData, pathData, signalData] = await Promise.all([
+        sceneResponse.json(),
+        pathResponse.json(),
+        signalResponse.json(),
+      ]);
       this.buildRoutePath(pathData);
       this.buildRoute(sceneData);
       if (ROUTE_RENDER_OPTIONS.proceduralTrack) this.buildSelectedRouteTrack(NEXT_STATION_DISTANCE + 350);
       if (ROUTE_RENDER_OPTIONS.railHighlights) this.buildRailHighlights(NEXT_STATION_DISTANCE + 350);
-      if (ROUTE_RENDER_OPTIONS.sourceDepartureSignal) this.buildSourceDepartureSignal(sceneData);
+      if (ROUTE_RENDER_OPTIONS.sourceDepartureSignal) this.buildSourceDepartureSignal(sceneData, signalData);
       this.ready = true;
       this.applyCamera();
       this.canvas.dispatchEvent(new CustomEvent('route-ready', {
@@ -104,7 +112,7 @@ export class MstsRouteScene {
     const key = `${textureName}|${definition?.alphaTestMode || 0}`;
     if (this.materialCache.has(key)) return this.materialCache.get(key);
     let texture = null;
-    if (textureName) {
+    if (textureName && AVAILABLE_TEXTURES.has(textureName)) {
       texture = this.textureLoader.load(`${TEXTURE_PATH}${encodeURIComponent(textureName)}`);
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
@@ -126,7 +134,13 @@ export class MstsRouteScene {
 
   buildRoute(data) {
     const instancesByShape = new Map();
+    const dedicatedSignalUids = new Set([
+      ROUTE_CONTEXT.departureSignalSourceUid,
+      ROUTE_CONTEXT.neighborSignalSourceUid,
+    ]);
     data.instances.forEach((instance) => {
+      // 这两架信号机由独立的、带原始 Sign 贴图和可控灯态的模型渲染，避免重复叠加。
+      if (instance.type === 'SignalObj' && dedicatedSignalUids.has(instance.uid)) return;
       if (!instancesByShape.has(instance.shape)) instancesByShape.set(instance.shape, []);
       instancesByShape.get(instance.shape).push(instance);
     });
@@ -378,7 +392,7 @@ export class MstsRouteScene {
     this.routeRoot.add(sleepers);
   }
 
-  buildSourceDepartureSignal(data) {
+  buildSourceDepartureSignal(data, signalAsset) {
     // 固定使用已核对的株洲站 1 道出站信号机及其左侧邻线信号机，不能以“最近信号机”猜测对象。
     const selectSignal = (uid) => {
       const instance = data.instances.find((item) => item.uid === uid && item.type === 'SignalObj' && item.shape === 'chuzhan.s');
@@ -392,15 +406,36 @@ export class MstsRouteScene {
       return;
     }
 
-    // 本体已由 buildRoute() 从游戏 shape 渲染；此处只叠加教学用四显示灯位。
-    // 该路线的 chuzhan.s 不含可直接驱动的网页灯态，因此按 sigcfg.dat 的灯位
-    // 坐标在同规格矮型出站信号机上叠加，不伪造为原路线联锁结果。
-    this.departureSignal = this.createSignalLightOverlay(departure, 'SOURCE_DWARF_DEPARTURE_SIGNAL_LIGHTS', true);
-    this.neighborSignal = this.createSignalLightOverlay(neighbor, 'SOURCE_DWARF_NEIGHBOR_SIGNAL_LIGHTS', false);
+    if (signalAsset?.source?.fileName !== 'chuzhan.s' || !Array.isArray(signalAsset.groups)) {
+      this.error = new Error('株洲站出站信号机模型数据无效。');
+      return;
+    }
+
+    // 信号机本体来自原游戏 chuzhan.s，位置与朝向来自世界文件 UID 172/173。
+    // 游戏 shape 不含可由网页直接切换的联锁灯态，因此仅在原灯位上叠加可控点灯层。
+    this.departureSignal = this.createSourceSignal(departure, signalAsset, 'SOURCE_DWARF_DEPARTURE_SIGNAL', true);
+    this.neighborSignal = this.createSourceSignal(neighbor, signalAsset, 'SOURCE_DWARF_NEIGHBOR_SIGNAL', false);
     this.setDepartureSignalAspect(this.signalAspect);
   }
 
-  createSignalLightOverlay(selected, name, isDepartureSignal) {
+  createSignalGlowTexture() {
+    if (this.signalGlowTexture) return this.signalGlowTexture;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const context = canvas.getContext('2d');
+    const gradient = context.createRadialGradient(32, 32, 2, 32, 32, 31);
+    gradient.addColorStop(0, 'rgba(255,255,255,1)');
+    gradient.addColorStop(0.23, 'rgba(255,255,255,.95)');
+    gradient.addColorStop(0.52, 'rgba(255,255,255,.42)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 64, 64);
+    this.signalGlowTexture = new THREE.CanvasTexture(canvas);
+    this.signalGlowTexture.colorSpace = THREE.SRGBColorSpace;
+    return this.signalGlowTexture;
+  }
+
+  createSourceSignal(selected, signalAsset, name, isDepartureSignal) {
     const root = new THREE.Group();
     root.name = name;
     root.position.fromArray(selected.instance.position);
@@ -411,6 +446,28 @@ export class MstsRouteScene {
     root.userData.alongDistance = selected.projection.alongDistance;
     root.userData.signedLateral = selected.projection.signedLateral;
 
+    const visual = new THREE.Group();
+    visual.name = `${name}_VISUAL`;
+    root.add(visual);
+    const body = new THREE.Group();
+    body.name = `${name}_BODY`;
+    signalAsset.groups.forEach((group, groupIndex) => {
+      if (!group.positions?.length) return;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(group.positions, 3));
+      if (group.uvs?.length === (group.positions.length / 3) * 2) {
+        geometry.setAttribute('uv', new THREE.Float32BufferAttribute(group.uvs, 2));
+      }
+      geometry.computeVertexNormals();
+      geometry.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geometry, this.getMaterial(signalAsset.materials[group.materialIndex]));
+      mesh.name = `${name}_BODY_${groupIndex}`;
+      mesh.userData.sourceShape = signalAsset.source.fileName;
+      mesh.userData.sourceSha256 = signalAsset.source.sha256;
+      body.add(mesh);
+    });
+    visual.add(body);
+
     const lampGeometry = new THREE.SphereGeometry(0.095, 14, 10);
     const lampDefinitions = {
       red: [-0.243, 0.49, 0.025],
@@ -420,17 +477,34 @@ export class MstsRouteScene {
     };
     const lamps = {};
     const lampMeshes = [];
-    for (const [name, position] of Object.entries(lampDefinitions)) {
-      const material = new THREE.MeshBasicMaterial({ color: '#121617', transparent: true, opacity: 0.72, toneMapped: false });
-      const lamp = new THREE.Mesh(lampGeometry, material);
-      lamp.name = `SOURCE_SIGNAL_${name.toUpperCase()}`;
+    const glowSprites = [];
+    for (const [lampName, position] of Object.entries(lampDefinitions)) {
+      const lensMaterial = new THREE.MeshBasicMaterial({ color: '#121617', transparent: true, opacity: 0.72, toneMapped: false });
+      const lamp = new THREE.Mesh(lampGeometry, lensMaterial);
+      lamp.name = `SOURCE_SIGNAL_${lampName.toUpperCase()}`;
       lamp.position.fromArray(position);
-      root.add(lamp);
-      lamps[name] = material;
+      visual.add(lamp);
+      const glowMaterial = new THREE.SpriteMaterial({
+        map: this.createSignalGlowTexture(),
+        color: '#121617',
+        transparent: true,
+        opacity: 0,
+        depthTest: true,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const glow = new THREE.Sprite(glowMaterial);
+      glow.name = `${lamp.name}_GLOW`;
+      glow.position.copy(lamp.position);
+      glow.userData.basePosition = lamp.position.clone();
+      glow.renderOrder = 8;
+      root.add(glow);
+      lamps[lampName] = { lensMaterial, glowMaterial };
       lampMeshes.push(lamp);
+      glowSprites.push(glow);
     }
     this.routeRoot.add(root);
-    return { root, lamps, lampMeshes, projection: selected.projection };
+    return { root, visual, body, lamps, lampMeshes, glowSprites, projection: selected.projection };
   }
 
   setDepartureSignalAspect(aspect) {
@@ -447,12 +521,14 @@ export class MstsRouteScene {
       greenYellow: ['greenLower', 'yellow'],
       yellow: ['yellow'],
       red: ['red'],
-    }[this.signalAspect] || [];
+    }[aspect] || [];
     const colors = { green: '#28e878', greenLower: '#28e878', yellow: '#f6c744', red: '#e54a46' };
-    for (const [name, material] of Object.entries(this.departureSignal.lamps)) {
+    for (const [name, materials] of Object.entries(signal.lamps)) {
       const on = active.includes(name);
-      material.color.set(on ? colors[name] : '#121617');
-      material.opacity = on ? this.signalLampVisibility : Math.min(0.72, this.signalLampVisibility * 0.72);
+      materials.lensMaterial.color.set(on ? colors[name] : '#121617');
+      materials.lensMaterial.opacity = on ? this.signalLampVisibility : Math.min(0.72, this.signalLampVisibility * 0.72);
+      materials.glowMaterial.color.set(on ? colors[name] : '#121617');
+      materials.glowMaterial.opacity = on ? this.signalLampVisibility * 0.94 : 0;
     }
   }
 
@@ -461,9 +537,14 @@ export class MstsRouteScene {
       if (!signal) continue;
       const head = signal.root.localToWorld(new THREE.Vector3(0, 0.70, 0));
       const distance = this.camera.position.distanceTo(head);
-      // 实体本体保持游戏原比例；仅把点灯透镜适度放大，保证远距教学时可辨认。
-      const scale = THREE.MathUtils.clamp(distance / 48, 1, 12);
-      signal.lampMeshes.forEach((lamp) => lamp.scale.setScalar(scale));
+      // 120 m 内恢复游戏原比例；远距采用教学 LOD，使 1.37 m 矮型信号机仍可辨认。
+      const teachingScale = THREE.MathUtils.clamp(distance / 105, 1, 5.2);
+      signal.visual.scale.setScalar(teachingScale);
+      const glowSize = THREE.MathUtils.clamp(distance * 0.0075, 0.16, 4.3);
+      signal.glowSprites.forEach((glow) => {
+        glow.position.copy(glow.userData.basePosition).multiplyScalar(teachingScale);
+        glow.scale.setScalar(glowSize);
+      });
     }
   }
 
