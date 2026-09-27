@@ -1,13 +1,23 @@
 import { TrainSimulation } from './dynamics.js?rev=signal-pair-start-v3-20260927';
 import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=signal-pair-start-v3-20260927';
-import { MstsRouteScene } from './mstsRouteScene.js?rev=source-signal-v4-20260927';
+import { MstsRouteScene } from './mstsRouteScene.js?rev=pages-assets-v5-20260927';
 import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=assessment-softflow-v1-20260925';
 import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=signal-pair-start-v3-20260927';
 
 const $ = (q) => document.querySelector(q);
 const sim = new TrainSimulation();
 const overlay = $('#overlay');
-const routeScene = new MstsRouteScene($('#route-scene'));
+const routeCanvas = $('#route-scene');
+const routeScene = new MstsRouteScene(routeCanvas);
+// 冷启动时首次 render 早于异步路线加载完成；ready 后必须重新同步画布与信号标注。
+routeCanvas.addEventListener('route-ready',()=>render(sim.state));
+routeCanvas.addEventListener('route-error',(event)=>{
+  routeCanvas.classList.remove('live');
+  const hint=$('#hint');
+  if(hint)hint.textContent=`三维线路加载失败：${event.detail?.message||'请刷新页面重试'}`;
+});
+// route-error 已在页面提示，防止被浏览器重复报告为未处理的 Promise。
+routeScene.loadPromise.catch(()=>{});
 const views = { front: 'HXD1C_front.png', left: 'HXD1C_left_full.png', right: 'HXD1C_right_full.png' };
 const debugMode = new URLSearchParams(location.search).get('debug') === '1';
 const keys = [['lkj','LKJ确认'],['panto','前受电弓'],['main-breaker','主断合'],['compressor','压缩机'],['parking','停放缓解'],['headlight','前照灯'],['horn','风笛'],['reset','警惕/复位']];

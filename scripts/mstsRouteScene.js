@@ -1,10 +1,12 @@
 import * as THREE from '../lib/three/three.module.js';
-import { ROUTE_CONTEXT } from './credentialScenario.js?rev=source-signal-v4-20260927';
+import { ROUTE_CONTEXT } from './credentialScenario.js?rev=pages-assets-v5-20260927';
 
-const SOURCE_PATH = '../assets/route/jingguang/zhuzhou-13877-scene.json';
-const ROUTE_PATH = '../assets/route/jingguang/zhuzhou-1-southbound-path.json';
-const SIGNAL_ASSET_PATH = '../assets/route/jingguang/chuzhan-signal.json';
-const TEXTURE_PATH = '../assets/route/jingguang/textures/';
+// fetch() 的相对地址以页面而非当前模块为基准；GitHub Pages 位于仓库子目录，
+// 因此所有三维资源必须相对 import.meta.url 解析，不能使用普通 ../assets 字符串。
+const SOURCE_PATH = new URL('../assets/route/jingguang/zhuzhou-13877-scene.json', import.meta.url).href;
+const ROUTE_PATH = new URL('../assets/route/jingguang/zhuzhou-1-southbound-path.json', import.meta.url).href;
+const SIGNAL_ASSET_PATH = new URL('../assets/route/jingguang/chuzhan-signal.json', import.meta.url).href;
+const TEXTURE_PATH = new URL('../assets/route/jingguang/textures/', import.meta.url).href;
 const AVAILABLE_TEXTURES = new Set(['Sign.png']);
 const NEXT_STATION_DISTANCE = ROUTE_CONTEXT.departureSignalDistance;
 // 真实路线模型优先。程序化轨道仅保留作回退实验，默认不得覆盖游戏来源的轨道与站台。

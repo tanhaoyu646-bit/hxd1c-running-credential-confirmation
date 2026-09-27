@@ -7,6 +7,7 @@ const scene = await readJson('assets/route/jingguang/zhuzhou-13877-scene.json');
 const path = await readJson('assets/route/jingguang/zhuzhou-1-southbound-path.json');
 const signal = await readJson('assets/route/jingguang/chuzhan-signal.json');
 const texture = await readFile('assets/route/jingguang/textures/Sign.png');
+const runtimeSource = await readFile('scripts/mstsRouteScene.js', 'utf8');
 
 assert.equal(signal.format, 'msts-signal-asset-v1');
 assert.equal(signal.source.fileName, 'chuzhan.s');
@@ -19,6 +20,20 @@ assert.equal(signal.groups.length, 2);
 assert(signal.groups.every((group) => group.positions.length > 0));
 assert(signal.materials.every((material) => material.texture === 'Sign.png'));
 assert.equal(createHash('sha256').update(texture).digest('hex').toUpperCase(), '29BE8A906D25617735DA2562A3E59FE3232F0ABD2551FF0A32FD8DCB22525AE2');
+
+for (const assetPath of [
+  '../assets/route/jingguang/zhuzhou-13877-scene.json',
+  '../assets/route/jingguang/zhuzhou-1-southbound-path.json',
+  '../assets/route/jingguang/chuzhan-signal.json',
+  '../assets/route/jingguang/textures/',
+]) {
+  assert(runtimeSource.includes(`new URL('${assetPath}', import.meta.url).href`), `Pages-safe URL missing for ${assetPath}`);
+}
+const pagesModuleUrl = new URL('https://tanhaoyu646-bit.github.io/hxd1c-running-credential-confirmation/scripts/mstsRouteScene.js');
+assert.equal(
+  new URL('../assets/route/jingguang/chuzhan-signal.json', pagesModuleUrl).href,
+  'https://tanhaoyu646-bit.github.io/hxd1c-running-credential-confirmation/assets/route/jingguang/chuzhan-signal.json',
+);
 
 const selected = new Map(scene.instances.filter((item) => item.uid === 172 || item.uid === 173).map((item) => [item.uid, item]));
 assert.equal(selected.size, 2);
