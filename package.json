@@ -1,0 +1,8 @@
+{
+  "name": "hxd1c-running-credential-confirmation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check scripts/dynamics.js && node --check scripts/procedure.js && node --check scripts/credentialScenario.js && node --check scripts/archive-2d-cabview-real-route.js"
+  }
+}
