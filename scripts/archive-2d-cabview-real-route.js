@@ -210,7 +210,8 @@ function renderLkj(){
   if(!lkjRoot)return;const screen=lkjRoot.querySelector('.lkj-screen');
   if(sim.state.lkjConfirmed&&lkjPhase==='special-unlock'){
     const scenario=getScenario(sim.state.scenarioId);
-    screen.innerHTML=`<b>非正常行车解锁</b><span>${scenario.label}：请输入凭证对应编号</span><strong class="lkj-input">${lkjUnlockDraft||'_'}</strong><span class="lkj-help">训练输入：${scenario.lkjUnlockCode}<br>数字键输入　【←】删除　【解锁】确认</span>`;return;
+    const unlockHint=sim.state.trainingMode==='teaching'?`教学提示：输入 ${scenario.lkjUnlockCode}`:'请按已核对的行车凭证编号输入';
+    screen.innerHTML=`<b>非正常行车解锁</b><span>${scenario.label}：请输入凭证对应编号</span><strong class="lkj-input">${lkjUnlockDraft||'_'}</strong><span class="lkj-help">${unlockHint}<br>数字键输入　【←】删除　【解锁】确认</span>`;return;
   }
   if(sim.state.lkjConfirmed&&lkjPhase!=='review'){
     const start=sim.state.lkjStartCorrect;
@@ -289,7 +290,10 @@ function renderCredentialModal(state){
     else if(scenario.id==='greenPermit'&&!state.radioContacted) content+=`${credentialAction('播放绿色许可证联控录音并完成文字应答','permit-contact','greenPermit')}`;
     else if(!state.credentialPresented) content+=`${credentialAction(`显示并核对${scenario.documentTitle}`,'credential-open')}`;
     else if(!state.credentialAttempted) content+=`${documentCard(scenario.documentTitle,scenario.documentText)}<div class="credential-choice"><b>核对结果</b>${credentialAction('信息一致，确认凭证','credential-correct')}${credentialAction('信息不一致','credential-wrong')}</div>`;
-    else if(state.lkjUnlockRequired&&!state.lkjUnlockCorrect&&!(state.trainingMode==='assessment'&&state.lkjUnlockAttempted)) content+=`${documentCard(scenario.documentTitle,scenario.documentText)}<p class="credential-note">当前凭证要求完成LKJ非正常行车解锁：请打开LKJ，输入${scenario.lkjUnlockCode}后按【解锁】。</p>${credentialAction('打开LKJ完成解锁','open-lkj-unlock')}`;
+    else if(state.lkjUnlockRequired&&!state.lkjUnlockCorrect&&!(state.trainingMode==='assessment'&&state.lkjUnlockAttempted)) {
+      const unlockInstruction=state.trainingMode==='teaching'?`请打开LKJ，输入 ${scenario.lkjUnlockCode} 后按【解锁】。`:'请打开LKJ，按已核对的行车凭证编号完成非正常行车解锁。';
+      content+=`${documentCard(scenario.documentTitle,scenario.documentText)}<p class="credential-note">当前凭证要求完成LKJ非正常行车解锁：${unlockInstruction}</p>${credentialAction('打开LKJ完成解锁','open-lkj-unlock')}`;
+    }
     else if(!state.departureNoticeReceived) content+=`${documentCard(scenario.documentTitle,scenario.documentText)}${credentialAction('播放发车通知并完成文字应答','departure-notice','departure')}`;
     else content+=state.handSignalConfirmed?'<p class="credential-note ok">行车凭证、发车通知和发车手信号均已确认，可以按驾驶台流程发车。</p>':'<p class="credential-note ok">行车凭证和发车通知已确认。请关闭本页，观察左上角发车手信号视频并点击确认。</p>';
   }
