@@ -1,8 +1,8 @@
-import { TrainSimulation } from './dynamics.js?rev=signal-pair-start-v3-20260927';
-import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=signal-pair-start-v3-20260927';
-import { MstsRouteScene } from './mstsRouteScene.js?rev=pages-assets-v5-20260927';
-import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=assessment-softflow-v1-20260925';
-import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=signal-pair-start-v3-20260927';
+import { TrainSimulation } from './dynamics.js?rev=neiyi-route-unlock-v1-20260928';
+import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=neiyi-route-unlock-v1-20260928';
+import { MstsRouteScene } from './mstsRouteScene.js?rev=neiyi-route-unlock-v1-20260928';
+import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=neiyi-route-unlock-v1-20260928';
+import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=neiyi-route-unlock-v1-20260928';
 
 const $ = (q) => document.querySelector(q);
 const sim = new TrainSimulation();
@@ -155,7 +155,7 @@ const lkjKeyDefs=[
   ['digit-5','定标／5',447,510,51,40],['digit-0','巡检／0',447,550,51,40],['query','查询',499,510,53,40],['left','左箭头／删除',499,550,53,40],
   ['up','上箭头',553,510,51,40],['down','下箭头',553,550,51,40],['dump','转储',604,510,50,40],['right','右箭头／确认',604,550,50,40],
 ];
-let lkjDraft={};let lkjFieldIndex=0;let lkjPhase='boot';let lkjNotice='';let lkjNoticeIndex=0;
+let lkjDraft={};let lkjFieldIndex=0;let lkjPhase='boot';let lkjNotice='';let lkjNoticeIndex=0;let lkjUnlockDraft='';
 function buildLkj(){
   const root=document.createElement('div');root.className='device-modal lkj-modal';root.setAttribute('aria-hidden','true');
   root.innerHTML=`<div class="device-shell lkj-shell" role="dialog" aria-modal="true" aria-label="LKJ2000监控装置"><div class="device-head"><div><strong>LKJ2000 监控装置</strong><span>输入参数并核对运行揭示</span></div><button type="button" class="device-close" aria-label="关闭">×</button></div><div class="lkj-device"><img src="./assets/lkj/LKJ2000.png" alt="LKJ2000设备面板"><div class="lkj-screen"></div><div class="lkj-keypad"></div></div></div>`;
@@ -168,6 +168,20 @@ function playLkjKey(){try{lkjKeyAudio.currentTime=0;lkjKeyAudio.play().catch(()=
 function flashLkj(message){lkjNotice=message;renderLkj();const screen=lkjRoot?.querySelector('.lkj-screen');screen?.classList.add('error');setTimeout(()=>{if(lkjNotice===message){lkjNotice='';renderLkj();}},900);}
 function handleLkjKey(id){
   playLkjKey();navigator.vibrate?.(12);
+  if(sim.state.lkjConfirmed&&lkjPhase==='special-unlock'){
+    if(id.startsWith('digit-')){if(lkjUnlockDraft.length<12)lkjUnlockDraft+=id.slice(6);renderLkj();return;}
+    if(id==='left'){lkjUnlockDraft=lkjUnlockDraft.slice(0,-1);renderLkj();return;}
+    if(id==='unlock'||id==='right'||id==='query'){
+      const accepted=sim.command('lkj-special-unlock',lkjUnlockDraft);
+      if(accepted){
+        lkjPhase='done';lkjUnlockDraft='';renderLkj();
+        closeLkj();
+        openCredentialModal();
+      } else { lkjUnlockDraft='';renderLkj(); }
+      return;
+    }
+    flashLkj('请输入凭证编号或电话记录号后按【解锁】');return;
+  }
   if(sim.state.lkjConfirmed&&id==='digit-7'){sim.command('lkj-start');renderLkj();return;}
   if(sim.state.lkjConfirmed){if(id==='query')lkjPhase='review';else if(lkjPhase==='review'&&(id==='left'||id==='relief'||id==='right'))lkjPhase='done';renderLkj();return;}
   if(lkjPhase==='boot'){if(id==='query'||id==='right'){lkjPhase='edit';lkjFieldIndex=0;renderLkj();}else flashLkj('请按【查询】进入参数设定');return;}
@@ -194,6 +208,10 @@ function handleLkjKey(id){
 }
 function renderLkj(){
   if(!lkjRoot)return;const screen=lkjRoot.querySelector('.lkj-screen');
+  if(sim.state.lkjConfirmed&&lkjPhase==='special-unlock'){
+    const scenario=getScenario(sim.state.scenarioId);
+    screen.innerHTML=`<b>非正常行车解锁</b><span>${scenario.label}：请输入凭证对应编号</span><strong class="lkj-input">${lkjUnlockDraft||'_'}</strong><span class="lkj-help">训练输入：${scenario.lkjUnlockCode}<br>数字键输入　【←】删除　【解锁】确认</span>`;return;
+  }
   if(sim.state.lkjConfirmed&&lkjPhase!=='review'){
     const start=sim.state.lkjStartCorrect;
     const error=sim.state.lkjStartError;
@@ -212,7 +230,7 @@ function renderLkj(){
   const last=lkjNoticeIndex===RUNNING_NOTICES.length-1;
   screen.innerHTML=`<b>运行揭示 ${lkjNoticeIndex+1}/${RUNNING_NOTICES.length}</b><span>${RUNNING_NOTICES[lkjNoticeIndex]}</span><strong>${last?'按【→】确认并投入监控':'按【→】查看下一条揭示'}</strong><span class="lkj-help">【←】返回参数${lkjNotice?`<br>${lkjNotice}`:''}</span>`;
 }
-function openLkj(){if(!lkjRoot)buildLkj();closeSwitchPanel();closeSignalInspection();closeCredentialModal();lkjPhase=sim.state.lkjConfirmed?'done':'boot';lkjNoticeIndex=0;lkjDraft=sim.state.lkjData&&!sim.state.lkjData.debug?{...sim.state.lkjData}:{};lkjRoot.classList.add('open');lkjRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderLkj();}
+function openLkj(mode='normal'){if(!lkjRoot)buildLkj();closeSwitchPanel();closeSignalInspection();closeCredentialModal();lkjPhase=mode==='special-unlock'&&sim.state.lkjConfirmed?'special-unlock':sim.state.lkjConfirmed?'done':'boot';lkjUnlockDraft='';lkjNoticeIndex=0;lkjDraft=sim.state.lkjData&&!sim.state.lkjData.debug?{...sim.state.lkjData}:{};lkjRoot.classList.add('open');lkjRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderLkj();}
 function closeLkj(){if(!lkjRoot)return;lkjRoot.classList.remove('open');lkjRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
 function buildSignalInspection(){
   const root=document.createElement('div');root.className='device-modal signal-modal';root.setAttribute('aria-hidden','true');
@@ -271,6 +289,7 @@ function renderCredentialModal(state){
     else if(scenario.id==='greenPermit'&&!state.radioContacted) content+=`${credentialAction('播放绿色许可证联控录音并完成文字应答','permit-contact','greenPermit')}`;
     else if(!state.credentialPresented) content+=`${credentialAction(`显示并核对${scenario.documentTitle}`,'credential-open')}`;
     else if(!state.credentialAttempted) content+=`${documentCard(scenario.documentTitle,scenario.documentText)}<div class="credential-choice"><b>核对结果</b>${credentialAction('信息一致，确认凭证','credential-correct')}${credentialAction('信息不一致','credential-wrong')}</div>`;
+    else if(state.lkjUnlockRequired&&!state.lkjUnlockCorrect&&!(state.trainingMode==='assessment'&&state.lkjUnlockAttempted)) content+=`${documentCard(scenario.documentTitle,scenario.documentText)}<p class="credential-note">当前凭证要求完成LKJ非正常行车解锁：请打开LKJ，输入${scenario.lkjUnlockCode}后按【解锁】。</p>${credentialAction('打开LKJ完成解锁','open-lkj-unlock')}`;
     else if(!state.departureNoticeReceived) content+=`${documentCard(scenario.documentTitle,scenario.documentText)}${credentialAction('播放发车通知并完成文字应答','departure-notice','departure')}`;
     else content+=state.handSignalConfirmed?'<p class="credential-note ok">行车凭证、发车通知和发车手信号均已确认，可以按驾驶台流程发车。</p>':'<p class="credential-note ok">行车凭证和发车通知已确认。请关闭本页，观察左上角发车手信号视频并点击确认。</p>';
   }
@@ -289,6 +308,7 @@ function renderCredentialModal(state){
     else if(action==='credential-open'){accepted=command('credential-open');}
     else if(action==='credential-correct'){accepted=command('credential-submit',true);}
     else if(action==='credential-wrong'){accepted=command('credential-submit',false);}
+    else if(action==='open-lkj-unlock'){openLkj('special-unlock');return;}
     else if(action==='departure-notice'){accepted=command('departure-notice');}
     if(accepted&&button.dataset.audioKind)playStationAudio(button.dataset.audioKind);
     renderCredentialModal(sim.state);

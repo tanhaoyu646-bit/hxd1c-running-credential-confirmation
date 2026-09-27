@@ -1,5 +1,5 @@
-import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=assessment-softflow-v1-20260925';
-import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=signal-pair-start-v3-20260927';
+import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=neiyi-route-unlock-v1-20260928';
+import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=neiyi-route-unlock-v1-20260928';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const TRACTION_BRAKE_CYL_MAX = 15;
@@ -26,6 +26,7 @@ export class TrainSimulation {
       initialConfirmed: false, initialAttempted: false,
       lkjConfirmed: false, lkjAttempted: false, lkjCorrect: false, lkjErrors: [], lkjData: null,
       lkjStartAttempted: false, lkjStartCorrect: false, lkjStartError: '', lkjStartDistance: null,
+      lkjUnlockRequired: false, lkjUnlockAttempted: false, lkjUnlockCorrect: false, lkjUnlockCode: '', lkjUnlockErrors: [],
       panto: false, mainBreaker: false, compressor: false,
       parkingBrake: true, authority: false, trainingMode: 'teaching', signalAspect: 'green', signalObserved: false, signalAnswer: null,
       signalMeaningCorrect: false, handSignalRequired: true, handSignalConfirmed: false,
@@ -95,17 +96,18 @@ export class TrainSimulation {
     const s = this.state;
     const scenario = getScenario(s.scenarioId);
     const lkjReady = this.lkjWorkflowReady();
+    const specialUnlockReady = !s.lkjUnlockRequired || s.lkjUnlockCorrect || (this.isAssessment() && s.lkjUnlockAttempted);
     if (scenario.id === 'normal') {
       s.credentialConfirmed = Boolean(s.radioContacted && s.signalObserved && s.directionObserved);
       s.credentialCorrect = Boolean(s.radioContacted && s.signalMeaningCorrect && s.directionCorrect);
-      s.authority = Boolean(lkjReady && s.credentialConfirmed && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
+      s.authority = Boolean(lkjReady && s.credentialConfirmed && specialUnlockReady && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
     } else if (scenario.id === 'weather') {
       s.credentialConfirmed = Boolean(s.orderSigned && s.locomotiveSignalObserved && s.weatherReportSent && s.departureNoticeReceived);
       s.credentialCorrect = Boolean(s.credentialConfirmed && !s.signalMismatch);
-      s.authority = Boolean(lkjReady && s.credentialConfirmed && !s.signalMismatch && (!s.handSignalRequired || s.handSignalConfirmed));
+      s.authority = Boolean(lkjReady && s.credentialConfirmed && specialUnlockReady && !s.signalMismatch && (!s.handSignalRequired || s.handSignalConfirmed));
     } else {
       s.credentialConfirmed = Boolean(s.credentialAttempted && s.departureNoticeReceived);
-      s.authority = Boolean(lkjReady && s.credentialConfirmed && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
+      s.authority = Boolean(lkjReady && s.credentialConfirmed && specialUnlockReady && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
     }
   }
   command(id, value) {
@@ -141,6 +143,10 @@ export class TrainSimulation {
       s.directionObserved = false; s.directionCorrect = false; s.locomotiveSignalObserved = false;
       s.weatherReportSent = false; s.departureNoticeReceived = false; s.limitedStart = false;
       s.handSignalRequired = true; s.handSignalConfirmed = false;
+      s.lkjUnlockRequired = Boolean(scenario.requiresLkjUnlock);
+      s.lkjUnlockAttempted = false; s.lkjUnlockCorrect = false;
+      s.lkjUnlockCode = scenario.lkjUnlockCode || '';
+      s.lkjUnlockErrors = [];
       s.signalMismatch = false; s.signalPassed = false; s.completed = false;
       this.syncAuthority();
       this.emit(`已选择“${scenario.label}”场景：${scenario.description}`);
@@ -193,13 +199,30 @@ export class TrainSimulation {
         return this.reject('凭证核对不正确，请重新逐项核对。');
       }
       s.credentialAttempted = true; s.credentialCorrect = correct;
-      s.credentialStage = 'await-departure-notice';
+      s.credentialStage = s.lkjUnlockRequired ? 'await-lkj-unlock' : 'await-departure-notice';
       this.emit(s.credentialCorrect ? '行车凭证已核对。请接收发车通知。' : '凭证核对错误已记录；考评流程继续。');
+      return true;
+    }
+    if (id === 'lkj-special-unlock') {
+      if (!s.lkjUnlockRequired) return this.reject('当前场景不要求LKJ非正常行车解锁。');
+      if (!s.credentialAttempted) return this.reject('请先完成绿色许可证或路票核对。');
+      const code = String(value || '').trim();
+      s.lkjUnlockAttempted = true;
+      s.lkjUnlockCorrect = code === s.lkjUnlockCode;
+      s.lkjUnlockErrors = s.lkjUnlockCorrect ? [] : ['lkjUnlockCode'];
+      if (!s.lkjUnlockCorrect && !this.isAssessment()) {
+        this.syncAuthority();
+        return this.reject('LKJ解锁内容不正确，请按凭证编号或电话记录号重新输入。');
+      }
+      s.credentialStage = 'await-departure-notice';
+      this.syncAuthority();
+      this.emit(s.lkjUnlockCorrect ? 'LKJ非正常行车解锁完成。请接收发车通知。' : 'LKJ解锁错误已记录；考评流程继续。');
       return true;
     }
     if (id === 'departure-notice') {
       const scenario = getScenario(s.scenarioId);
       if (!['greenPermit', 'routeTicket'].includes(scenario.id) || !s.credentialAttempted) return this.reject('请先完成行车凭证核对。');
+      if (s.lkjUnlockRequired && !s.lkjUnlockCorrect && !this.isAssessment()) return this.reject('请先完成LKJ非正常行车解锁。');
       s.departureNoticeReceived = true; s.credentialStage = 'ready-depart'; this.syncAuthority();
       this.emit('已收到发车通知；联控应答完成，具备发车条件。'); return true;
     }

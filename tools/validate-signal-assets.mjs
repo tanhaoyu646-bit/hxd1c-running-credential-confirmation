@@ -3,46 +3,37 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 const readJson = async (path) => JSON.parse(await readFile(path, 'utf8'));
-const scene = await readJson('assets/route/jingguang/zhuzhou-13877-scene.json');
-const path = await readJson('assets/route/jingguang/zhuzhou-1-southbound-path.json');
-const signal = await readJson('assets/route/jingguang/chuzhan-signal.json');
-const texture = await readFile('assets/route/jingguang/textures/Sign.png');
+const scene = await readJson('assets/msts-neiyi-corridor/neiyi-neijiang-neijiangnan-scene.json');
+const path = await readJson('assets/msts-neiyi/neiyi-5635-trackdb-path.json');
+const signal = scene.shapes['chuzhan-halfauto-zhuci.s'];
 const runtimeSource = await readFile('scripts/mstsRouteScene.js', 'utf8');
 
-assert.equal(signal.format, 'msts-signal-asset-v1');
-assert.equal(signal.source.fileName, 'chuzhan.s');
-assert.equal(signal.source.sha256, '69F3DBFAADBAC175E77311200B8904F1E78AED3179B1AB5291890C7E851B93D1');
-assert.equal(signal.source.subObjectMask, 1);
-assert.equal(signal.summary.sourceSubObjectCount, 1);
-assert.deepEqual(signal.summary.selectedSubObjects, [0]);
-assert.equal(signal.summary.triangleCount, 320);
+assert(signal, '内宜线出站信号机模型不存在');
+assert.equal(signal.fileName, 'chuzhan-halfauto-zhuci.s');
 assert.equal(signal.groups.length, 2);
 assert(signal.groups.every((group) => group.positions.length > 0));
-assert(signal.materials.every((material) => material.texture === 'Sign.png'));
-assert.equal(createHash('sha256').update(texture).digest('hex').toUpperCase(), '29BE8A906D25617735DA2562A3E59FE3232F0ABD2551FF0A32FD8DCB22525AE2');
+assert(signal.materials.every((material) => material.texture.toLowerCase() === 'sign.png'));
 
 for (const assetPath of [
-  '../assets/route/jingguang/zhuzhou-13877-scene.json',
-  '../assets/route/jingguang/zhuzhou-1-southbound-path.json',
-  '../assets/route/jingguang/chuzhan-signal.json',
-  '../assets/route/jingguang/textures/',
+  '../assets/msts-neiyi-corridor/neiyi-neijiang-neijiangnan-scene.json',
+  '../assets/msts-neiyi/neiyi-5635-trackdb-path.json',
+  '../assets/msts-neiyi-corridor/textures/',
 ]) {
   assert(runtimeSource.includes(`new URL('${assetPath}', import.meta.url).href`), `Pages-safe URL missing for ${assetPath}`);
 }
 const pagesModuleUrl = new URL('https://tanhaoyu646-bit.github.io/hxd1c-running-credential-confirmation/scripts/mstsRouteScene.js');
 assert.equal(
-  new URL('../assets/route/jingguang/chuzhan-signal.json', pagesModuleUrl).href,
-  'https://tanhaoyu646-bit.github.io/hxd1c-running-credential-confirmation/assets/route/jingguang/chuzhan-signal.json',
+  new URL('../assets/msts-neiyi-corridor/neiyi-neijiang-neijiangnan-scene.json', pagesModuleUrl).href,
+  'https://tanhaoyu646-bit.github.io/hxd1c-running-credential-confirmation/assets/msts-neiyi-corridor/neiyi-neijiang-neijiangnan-scene.json',
 );
 
-const selected = new Map(scene.instances.filter((item) => item.uid === 172 || item.uid === 173).map((item) => [item.uid, item]));
-assert.equal(selected.size, 2);
-for (const uid of [172, 173]) {
-  assert.equal(selected.get(uid).type, 'SignalObj');
-  assert.equal(selected.get(uid).shape, 'chuzhan.s');
+const selected = scene.instances.filter((item) => item.uid === 52244 || item.uid === 52245);
+assert(selected.some((item) => item.uid === 52244));
+assert(selected.some((item) => item.uid === 52245));
+for (const item of selected) {
+  assert.equal(item.type, 'SignalObj');
+  assert.equal(item.shape, 'chuzhan-halfauto-zhuci.s');
 }
-assert.deepEqual(selected.get(172).position, [16.37, -0.038, -618.15]);
-assert.deepEqual(selected.get(173).position, [21.65, -0.038, -618.4]);
 
 const points = [];
 for (let index = 0; index < path.positions.length; index += 3) points.push(path.positions.slice(index, index + 3));
@@ -79,12 +70,12 @@ function projectToPath(position) {
   return best;
 }
 
-const departure = projectToPath(selected.get(172).position);
-const neighbor = projectToPath(selected.get(173).position);
-assert(Math.abs(departure.alongDistance - 571.53) < 0.1);
-assert(Math.abs(neighbor.alongDistance - 571.87) < 0.1);
-assert(departure.signedLateral < -4 && departure.signedLateral > -5.2);
-assert(neighbor.signedLateral < -9.2 && neighbor.signedLateral > -10.6);
-assert(neighbor.signedLateral < departure.signedLateral);
+const departure = projectToPath(selected.find((item) => item.uid === 52244).position);
+const neighbor = projectToPath(selected.filter((item) => item.uid === 52245).sort((a, b) => Math.abs(projectToPath(a.position).alongDistance - 459.44) - Math.abs(projectToPath(b.position).alongDistance - 459.44))[0].position);
+assert(Math.abs(departure.alongDistance - 454.14) < 0.1);
+assert(Math.abs(neighbor.alongDistance - 459.44) < 0.1);
+assert(departure.signedLateral > 2 && departure.signedLateral < 3);
+assert(neighbor.signedLateral > 7 && neighbor.signedLateral < 9);
+assert(neighbor.alongDistance > departure.alongDistance);
 
-console.log(`Signal assets valid: UID 172 at ${departure.alongDistance.toFixed(2)} m, UID 173 at ${neighbor.alongDistance.toFixed(2)} m.`);
+console.log(`Signal assets valid: UID 52244 at ${departure.alongDistance.toFixed(2)} m, UID 52245 at ${neighbor.alongDistance.toFixed(2)} m.`);

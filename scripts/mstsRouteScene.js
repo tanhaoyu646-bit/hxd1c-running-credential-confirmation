@@ -1,13 +1,19 @@
 import * as THREE from '../lib/three/three.module.js';
-import { ROUTE_CONTEXT } from './credentialScenario.js?rev=pages-assets-v5-20260927';
+import { ROUTE_CONTEXT } from './credentialScenario.js?rev=neiyi-route-unlock-v1-20260928';
 
 // fetch() 的相对地址以页面而非当前模块为基准；GitHub Pages 位于仓库子目录，
 // 因此所有三维资源必须相对 import.meta.url 解析，不能使用普通 ../assets 字符串。
-const SOURCE_PATH = new URL('../assets/route/jingguang/zhuzhou-13877-scene.json', import.meta.url).href;
-const ROUTE_PATH = new URL('../assets/route/jingguang/zhuzhou-1-southbound-path.json', import.meta.url).href;
-const SIGNAL_ASSET_PATH = new URL('../assets/route/jingguang/chuzhan-signal.json', import.meta.url).href;
-const TEXTURE_PATH = new URL('../assets/route/jingguang/textures/', import.meta.url).href;
-const AVAILABLE_TEXTURES = new Set(['Sign.png']);
+const SOURCE_PATH = new URL('../assets/msts-neiyi-corridor/neiyi-neijiang-neijiangnan-scene.json', import.meta.url).href;
+const ROUTE_PATH = new URL('../assets/msts-neiyi/neiyi-5635-trackdb-path.json', import.meta.url).href;
+const TEXTURE_PATH = new URL('../assets/msts-neiyi-corridor/textures/', import.meta.url).href;
+// GitHub Pages 区分大小写；原游戏导出中的三处引用大小写与发布文件名不同。
+const TEXTURE_FILE_ALIASES = Object.freeze({
+  'acleanttrack1.png': 'ACleanTrack1.png',
+  'acleanttrack2.png': 'ACleanTrack2.png',
+  'acleantrack1.png': 'ACleanTrack1.png',
+  'acleantrack2.png': 'ACleanTrack2.png',
+  'sign.png': 'Sign.png',
+});
 const NEXT_STATION_DISTANCE = ROUTE_CONTEXT.departureSignalDistance;
 // 真实路线模型优先。程序化轨道仅保留作回退实验，默认不得覆盖游戏来源的轨道与站台。
 const ROUTE_RENDER_OPTIONS = Object.freeze({
@@ -79,24 +85,21 @@ export class MstsRouteScene {
 
   async load() {
     try {
-      const [sceneResponse, pathResponse, signalResponse] = await Promise.all([
+      const [sceneResponse, pathResponse] = await Promise.all([
         fetch(SOURCE_PATH, { cache: 'no-store' }),
         fetch(ROUTE_PATH, { cache: 'no-store' }),
-        fetch(SIGNAL_ASSET_PATH, { cache: 'no-store' }),
       ]);
       if (!sceneResponse.ok) throw new Error(`路线场景加载失败：HTTP ${sceneResponse.status}`);
       if (!pathResponse.ok) throw new Error(`轨道中心线加载失败：HTTP ${pathResponse.status}`);
-      if (!signalResponse.ok) throw new Error(`出站信号机模型加载失败：HTTP ${signalResponse.status}`);
-      const [sceneData, pathData, signalData] = await Promise.all([
+      const [sceneData, pathData] = await Promise.all([
         sceneResponse.json(),
         pathResponse.json(),
-        signalResponse.json(),
       ]);
       this.buildRoutePath(pathData);
       this.buildRoute(sceneData);
       if (ROUTE_RENDER_OPTIONS.proceduralTrack) this.buildSelectedRouteTrack(NEXT_STATION_DISTANCE + 350);
       if (ROUTE_RENDER_OPTIONS.railHighlights) this.buildRailHighlights(NEXT_STATION_DISTANCE + 350);
-      if (ROUTE_RENDER_OPTIONS.sourceDepartureSignal) this.buildSourceDepartureSignal(sceneData, signalData);
+      if (ROUTE_RENDER_OPTIONS.sourceDepartureSignal) this.buildSourceDepartureSignal(sceneData);
       this.ready = true;
       this.applyCamera();
       this.canvas.dispatchEvent(new CustomEvent('route-ready', {
@@ -111,11 +114,12 @@ export class MstsRouteScene {
 
   getMaterial(definition) {
     const textureName = definition?.texture || '';
-    const key = `${textureName}|${definition?.alphaTestMode || 0}`;
+    const fileName = TEXTURE_FILE_ALIASES[textureName.toLowerCase()] || textureName;
+    const key = `${fileName}|${definition?.alphaTestMode || 0}`;
     if (this.materialCache.has(key)) return this.materialCache.get(key);
     let texture = null;
-    if (textureName && AVAILABLE_TEXTURES.has(textureName)) {
-      texture = this.textureLoader.load(`${TEXTURE_PATH}${encodeURIComponent(textureName)}`);
+    if (textureName) {
+      texture = this.textureLoader.load(`${TEXTURE_PATH}${encodeURIComponent(fileName)}`);
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
       texture.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
@@ -394,27 +398,36 @@ export class MstsRouteScene {
     this.routeRoot.add(sleepers);
   }
 
-  buildSourceDepartureSignal(data, signalAsset) {
-    // 固定使用已核对的株洲站 1 道出站信号机及其左侧邻线信号机，不能以“最近信号机”猜测对象。
-    const selectSignal = (uid) => {
-      const instance = data.instances.find((item) => item.uid === uid && item.type === 'SignalObj' && item.shape === 'chuzhan.s');
-      const projection = instance ? this.projectPointToPath(instance.position) : null;
-      return instance && projection ? { instance, projection } : null;
+  buildSourceDepartureSignal(data) {
+    // 使用原发车作业内宜线场景中的两架矮型出站信号机作为课堂三维载体。
+    // 行车凭证内容和录音仍按株洲课堂任务执行，不能把该三维载体冒充株洲实景。
+    const selectSignal = (uid, expectedDistance) => {
+      const candidates = data.instances
+        .filter((item) => item.uid === uid && item.type === 'SignalObj' && item.shape === 'chuzhan-halfauto-zhuci.s')
+        .map((instance) => ({ instance, projection: this.projectPointToPath(instance.position) }))
+        .filter(({ projection }) => projection)
+        .sort((a, b) => Math.abs(a.projection.alongDistance - expectedDistance) - Math.abs(b.projection.alongDistance - expectedDistance));
+      return candidates[0] || null;
     };
-    const departure = selectSignal(ROUTE_CONTEXT.departureSignalSourceUid);
-    const neighbor = selectSignal(ROUTE_CONTEXT.neighborSignalSourceUid);
+    const departure = selectSignal(ROUTE_CONTEXT.departureSignalSourceUid, ROUTE_CONTEXT.departureSignalExpectedDistance);
+    const neighbor = selectSignal(ROUTE_CONTEXT.neighborSignalSourceUid, ROUTE_CONTEXT.neighborSignalExpectedDistance);
     if (!departure || !neighbor) {
-      this.error = new Error('未找到株洲站 1 道已配置的矮型出站信号机。');
+      this.error = new Error('未找到原发车作业场景中配置的两架矮型出站信号机。');
       return;
     }
 
-    if (signalAsset?.source?.fileName !== 'chuzhan.s' || !Array.isArray(signalAsset.groups)) {
-      this.error = new Error('株洲站出站信号机模型数据无效。');
+    const signalShape = data.shapes['chuzhan-halfauto-zhuci.s'];
+    if (!signalShape || !Array.isArray(signalShape.groups) || !Array.isArray(signalShape.materials)) {
+      this.error = new Error('原发车作业场景出站信号机模型数据无效。');
       return;
     }
 
-    // 信号机本体来自原游戏 chuzhan.s，位置与朝向来自世界文件 UID 172/173。
-    // 游戏 shape 不含可由网页直接切换的联锁灯态，因此仅在原灯位上叠加可控点灯层。
+    const signalAsset = {
+      source: { fileName: signalShape.fileName, sha256: signalShape.sha256 || '' },
+      materials: signalShape.materials,
+      groups: signalShape.groups,
+    };
+    // 信号机本体和位置来自原场景，灯态由网页课堂层控制。
     this.departureSignal = this.createSourceSignal(departure, signalAsset, 'SOURCE_DWARF_DEPARTURE_SIGNAL', true);
     this.neighborSignal = this.createSourceSignal(neighbor, signalAsset, 'SOURCE_DWARF_NEIGHBOR_SIGNAL', false);
     this.setDepartureSignalAspect(this.signalAspect);
