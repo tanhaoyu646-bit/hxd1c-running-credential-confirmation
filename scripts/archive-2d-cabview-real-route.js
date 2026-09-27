@@ -1,5 +1,5 @@
-import { TrainSimulation } from './dynamics.js?rev=workflow-signal-lkj-v2-20260927';
-import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=workflow-signal-lkj-v2-20260927';
+import { TrainSimulation } from './dynamics.js?rev=departure-hand-signal-v4-20260927';
+import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=departure-hand-signal-v4-20260927';
 import { MstsRouteScene } from './mstsRouteScene.js?rev=workflow-signal-lkj-v2-20260927';
 import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=assessment-softflow-v1-20260925';
 import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=workflow-signal-lkj-v2-20260927';
@@ -23,6 +23,7 @@ let credentialRoot = null;
 let resultRoot = null;
 let resultShown = false;
 let signalTarget = null;
+let handSignalCard = null;
 const INITIAL_CHECKS = [
   ['traction', '牵引手柄', '零位'], ['direction', '换向手柄', '中立位'],
   ['autoBrake', '自动制动阀', '运转位'], ['independentBrake', '单独制动阀', '缓解位'],
@@ -72,6 +73,7 @@ function startDrag(id, el, event) {
 function createFront() {
   overlay.replaceChildren(); elements={};
   signalTarget=document.createElement('button');signalTarget.type='button';signalTarget.className='signal-trigger';signalTarget.setAttribute('aria-label','观察地面出站信号机');signalTarget.textContent='观察出站信号';signalTarget.addEventListener('click',(event)=>{event.stopPropagation();openSignalInspection();});overlay.append(signalTarget);
+  handSignalCard=document.createElement('section');handSignalCard.className='hand-signal-card';handSignalCard.setAttribute('aria-live','polite');handSignalCard.innerHTML='<b>确认发车手信号</b><video controls loop playsinline preload="metadata"><source src="./assets/video/AnimateDiff_00392-audio.mp4" type="video/mp4"></video><p>请观察发车手信号，确认显示正确后点击下方按钮。</p><button type="button" class="hand-signal-confirm">已确认发车手信号</button>';handSignalCard.querySelector('.hand-signal-confirm').addEventListener('click',()=>command('hand-signal-confirm'));overlay.append(handSignalCard);
   elements.auto=makeSprite('auto-brake','HXD1C_DZ.png',35,341,45,60,4,3,'自动制动阀（拖动）');
   elements.independent=makeSprite('independent-brake','HXD1C_XZ.png',138,341,35,60,4,3,'单独制动阀（拖动）');
   elements.traction=makeSprite('traction','HXD1C_GL.png',464,345,46,81,2,8,'牵引/电制动手柄（拖动）');
@@ -245,20 +247,22 @@ function renderCredentialModal(state){
   const documentCard=(title,text)=>`<section class="credential-document"><h3>${title}</h3><p>${text}</p>${fields?`<ol>${fields}</ol>`:''}</section>`;
   let content=`<p class="credential-context"><b>${scenario.label}</b>：${scenario.description}</p>`;
   if(scenario.id==='normal'){
-    content+=state.radioContacted?'<p class="credential-note ok">车站联控录音已播放。请关闭此页，点击窗外出站信号机确认绿灯；随后在此页选择运行方向。</p>':`${credentialAction('播放车站联控录音并完成文字应答','normal-contact','normal')}<p class="credential-note">录音内容对应“2026次、七斗冲方向、株洲站1道出站信号好了”。</p>`;
-    if(state.signalMeaningCorrect)content+=`<div class="credential-choice"><b>确认运行方向</b>${credentialAction('七斗冲方向','normal-direction-correct')}${credentialAction('其他方向','normal-direction-wrong')}</div>`;
+    if(!state.radioContacted) content+=`${credentialAction('播放车站联控录音并完成文字应答','normal-contact','normal')}<p class="credential-note">录音内容对应“2026次、七斗冲方向、株洲站1道出站信号好了”。</p>`;
+    else if(!state.signalMeaningCorrect) content+='<p class="credential-note ok">车站联控录音已播放。请关闭此页，点击窗外出站信号机确认绿灯；随后返回本页确认运行方向。</p>';
+    else if(!state.directionObserved||(state.trainingMode==='teaching'&&!state.directionCorrect)) content+=`<div class="credential-choice"><b>确认运行方向</b>${credentialAction('七斗冲方向','normal-direction-correct')}${credentialAction('其他方向','normal-direction-wrong')}</div>`;
+    else content+='<p class="credential-note ok">出站信号和运行方向已确认。请关闭本页，观察左上角发车手信号视频并点击确认。</p>';
   } else if(scenario.id==='weather') {
     if(!state.orderSigned) content+=`${documentCard(scenario.documentTitle,scenario.documentText)}${credentialAction('签收并确认调度命令','weather-order')}`;
     else if(!state.locomotiveSignalObserved) content+=`<div class="credential-choice"><b>确认机车信号显示</b>${credentialAction('绿灯','weather-loco-green')}${credentialAction('黄灯','weather-loco-wrong')}</div>`;
     else if(!state.weatherReportSent) content+=`${credentialAction('报告：地面出站信号无法辨认；接收发车通知','weather-report','departure')}<p class="credential-note">完成后按机车信号低速起动，接近地面出站信号机时必须再次确认。</p>`;
-    else content+=`<p class="credential-note ok">开车通知已收到。${state.credentialStage==='confirm-ground-signal'?'请点击窗外地面出站信号机确认。':'按机车信号低速起动。'}</p>`;
+    else content+=`<p class="credential-note ok">开车通知已收到。${state.handSignalConfirmed?(state.credentialStage==='confirm-ground-signal'?'请点击窗外地面出站信号机确认。':'按机车信号低速起动。'):'请关闭本页，观察左上角发车手信号视频并点击确认。'}</p>`;
   } else {
     if(scenario.id==='routeTicket'&&!state.orderSigned) content+=`${documentCard(scenario.orderTitle,scenario.orderText)}${credentialAction('签收并确认调度命令','route-order')}`;
     else if(scenario.id==='greenPermit'&&!state.radioContacted) content+=`${credentialAction('播放绿色许可证联控录音并完成文字应答','permit-contact','greenPermit')}`;
     else if(!state.credentialPresented) content+=`${credentialAction(`显示并核对${scenario.documentTitle}`,'credential-open')}`;
     else if(!state.credentialAttempted) content+=`${documentCard(scenario.documentTitle,scenario.documentText)}<div class="credential-choice"><b>核对结果</b>${credentialAction('信息一致，确认凭证','credential-correct')}${credentialAction('信息不一致','credential-wrong')}</div>`;
     else if(!state.departureNoticeReceived) content+=`${documentCard(scenario.documentTitle,scenario.documentText)}${credentialAction('播放发车通知并完成文字应答','departure-notice','departure')}`;
-    else content+='<p class="credential-note ok">行车凭证和发车通知均已确认，可以按驾驶台流程发车。</p>';
+    else content+=state.handSignalConfirmed?'<p class="credential-note ok">行车凭证、发车通知和发车手信号均已确认，可以按驾驶台流程发车。</p>':'<p class="credential-note ok">行车凭证和发车通知已确认。请关闭本页，观察左上角发车手信号视频并点击确认。</p>';
   }
   box.innerHTML=content;
   box.querySelectorAll('[data-credential-action]').forEach((button)=>button.addEventListener('click',()=>{
@@ -370,12 +374,22 @@ function syncSignalTarget(state){
   signalTarget.style.left=`${anchor.x}%`;signalTarget.style.top=`${anchor.y}%`;
   signalTarget.textContent=fogged?'雾中地面信号':'观察出站信号';
 }
+function syncHandSignalCard(state){
+  if(!handSignalCard)return;
+  const shouldOpen=selectedView==='front'&&state.handSignalRequired&&state.credentialConfirmed&&(state.credentialCorrect||state.trainingMode==='assessment')&&!state.handSignalConfirmed;
+  const wasOpen=handSignalCard.classList.contains('open');
+  handSignalCard.classList.toggle('open',shouldOpen);
+  if(shouldOpen===wasOpen)return;
+  const video=handSignalCard.querySelector('video');
+  if(shouldOpen){video.currentTime=0;video.play().catch(()=>{});}else video.pause();
+}
 function render(state,message='') {
   routeScene.setTrainingScenario(state.scenarioId);
   routeScene.setDepartureSignalAspect(state.signalAspect);
   // 线路及地面实体信号机从进入驾驶台起就可见；不得再依赖 LKJ 答对后才显示。
   routeScene.update(state.distance,state.speed,selectedView,true);
   syncSignalTarget(state);
+  syncHandSignalCard(state);
   if(selectedView==='front') {
     frame(elements.auto,[0,1,2,9,10,11][state.autoBrake],4,3); frame(elements.independent,Math.min(11,state.independentBrake),4,3); frame(elements.traction,tractionFrame(state.traction),2,8); frame(elements.direction,state.direction==='R'?0:state.direction==='N'?1:2,3,1);
     for(const [id] of keys) elements[id]?.classList.toggle('on',activeState(id,state));

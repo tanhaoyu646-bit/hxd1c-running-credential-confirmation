@@ -2,6 +2,7 @@ import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=assessme
 import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=workflow-signal-lkj-v2-20260927';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+const TRACTION_BRAKE_CYL_MAX = 15;
 
 const INITIAL_CHECK_LABELS = {
   traction: '牵引手柄零位',
@@ -27,7 +28,7 @@ export class TrainSimulation {
       lkjStartAttempted: false, lkjStartCorrect: false, lkjStartError: '', lkjStartDistance: null,
       panto: false, mainBreaker: false, compressor: false,
       parkingBrake: true, authority: false, trainingMode: 'teaching', signalAspect: 'green', signalObserved: false, signalAnswer: null,
-      signalMeaningCorrect: false, handSignalRequired: false, handSignalConfirmed: false,
+      signalMeaningCorrect: false, handSignalRequired: true, handSignalConfirmed: false,
       scenarioId: 'normal', scenarioSelected: false, credentialStage: 'select',
       radioContacted: false, orderSigned: false, credentialPresented: false,
       credentialAttempted: false, credentialCorrect: false, credentialConfirmed: false,
@@ -76,6 +77,20 @@ export class TrainSimulation {
   isAssessment() { return this.state.trainingMode === 'assessment'; }
   initialWorkflowReady() { return this.state.initialConfirmed || (this.isAssessment() && this.state.initialAttempted); }
   lkjWorkflowReady() { return this.state.lkjConfirmed || (this.isAssessment() && this.state.lkjAttempted); }
+  tractionInterlockReasons() {
+    const s = this.state;
+    const reasons = [];
+    if (!s.authority) reasons.push('行车凭证、开车通知或发车手信号尚未正确确认');
+    if (!s.mainBreaker) reasons.push('主断路器未闭合');
+    if (!s.headlight) reasons.push('前照灯未开启');
+    if (!s.horn) reasons.push('尚未鸣笛');
+    if (s.direction !== 'F') reasons.push('换向手柄未在前进位');
+    if (s.parkingBrake) reasons.push('停放制动未缓解');
+    if (s.autoBrake > 0) reasons.push('自动制动阀未在运转位');
+    if (s.independentBrake > 0) reasons.push('单独制动阀未在缓解位');
+    if (s.brakeCyl >= TRACTION_BRAKE_CYL_MAX) reasons.push(`制动缸压力仍为 ${Math.ceil(s.brakeCyl)} kPa`);
+    return reasons;
+  }
   syncAuthority() {
     const s = this.state;
     const scenario = getScenario(s.scenarioId);
@@ -83,14 +98,14 @@ export class TrainSimulation {
     if (scenario.id === 'normal') {
       s.credentialConfirmed = Boolean(s.radioContacted && s.signalObserved && s.directionObserved);
       s.credentialCorrect = Boolean(s.radioContacted && s.signalMeaningCorrect && s.directionCorrect);
-      s.authority = Boolean(lkjReady && s.credentialConfirmed && (s.credentialCorrect || this.isAssessment()));
+      s.authority = Boolean(lkjReady && s.credentialConfirmed && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
     } else if (scenario.id === 'weather') {
       s.credentialConfirmed = Boolean(s.orderSigned && s.locomotiveSignalObserved && s.weatherReportSent && s.departureNoticeReceived);
       s.credentialCorrect = Boolean(s.credentialConfirmed && !s.signalMismatch);
-      s.authority = Boolean(lkjReady && s.credentialConfirmed && !s.signalMismatch);
+      s.authority = Boolean(lkjReady && s.credentialConfirmed && !s.signalMismatch && (!s.handSignalRequired || s.handSignalConfirmed));
     } else {
       s.credentialConfirmed = Boolean(s.credentialAttempted && s.departureNoticeReceived);
-      s.authority = Boolean(lkjReady && s.credentialConfirmed && (s.credentialCorrect || this.isAssessment()));
+      s.authority = Boolean(lkjReady && s.credentialConfirmed && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
     }
   }
   command(id, value) {
@@ -125,6 +140,7 @@ export class TrainSimulation {
       s.credentialPresented = false; s.credentialAttempted = false; s.credentialCorrect = false;
       s.directionObserved = false; s.directionCorrect = false; s.locomotiveSignalObserved = false;
       s.weatherReportSent = false; s.departureNoticeReceived = false; s.limitedStart = false;
+      s.handSignalRequired = true; s.handSignalConfirmed = false;
       s.signalMismatch = false; s.signalPassed = false; s.completed = false;
       this.syncAuthority();
       this.emit(`已选择“${scenario.label}”场景：${scenario.description}`);
@@ -171,8 +187,12 @@ export class TrainSimulation {
     if (id === 'credential-submit') {
       const scenario = getScenario(s.scenarioId);
       if (!['greenPermit', 'routeTicket'].includes(scenario.id) || !s.credentialPresented) return this.reject('当前尚未显示需核对的行车凭证。');
-      s.credentialAttempted = true; s.credentialCorrect = Boolean(value);
-      if (!s.credentialCorrect && !this.isAssessment()) return this.reject('凭证核对不正确，请重新逐项核对。');
+      const correct = Boolean(value);
+      if (!correct && !this.isAssessment()) {
+        s.credentialAttempted = false; s.credentialCorrect = false; this.syncAuthority();
+        return this.reject('凭证核对不正确，请重新逐项核对。');
+      }
+      s.credentialAttempted = true; s.credentialCorrect = correct;
       s.credentialStage = 'await-departure-notice';
       this.emit(s.credentialCorrect ? '行车凭证已核对。请接收发车通知。' : '凭证核对错误已记录；考评流程继续。');
       return true;
@@ -185,8 +205,12 @@ export class TrainSimulation {
     }
     if (id === 'direction-answer') {
       if (s.scenarioId !== 'normal' || !s.radioContacted || !s.signalMeaningCorrect) return this.reject('请先完成车站联控和出站信号确认。');
-      s.directionObserved = true; s.directionCorrect = value === 'qidouchong'; this.syncAuthority();
-      if (!s.directionCorrect && !this.isAssessment()) return this.reject('运行方向不正确，请根据联控内容重新确认。');
+      const correct = value === 'qidouchong';
+      if (!correct && !this.isAssessment()) {
+        s.directionObserved = false; s.directionCorrect = false; this.syncAuthority();
+        return this.reject('运行方向不正确，请根据联控内容重新确认。');
+      }
+      s.directionObserved = true; s.directionCorrect = correct; this.syncAuthority();
       this.emit(s.directionCorrect ? '已确认七斗冲方向，具备发车条件。' : '方向确认错误已记录；考评流程继续。'); return true;
     }
     if (id === 'training-mode') {
@@ -234,8 +258,8 @@ export class TrainSimulation {
       this.emit(`已正确确认${SIGNAL_ASPECTS[s.signalAspect].label}。请继续确认运行方向。`); return true;
     }
     if (id === 'hand-signal-confirm') {
-      const signalReady = s.signalMeaningCorrect || (this.isAssessment() && s.signalObserved);
-      if (!signalReady) return this.reject('请先确认出站信号。');
+      if (!s.credentialConfirmed) return this.reject('请先完成本场景行车凭证和开车通知确认。');
+      if (!s.credentialCorrect && !this.isAssessment()) return this.reject('行车凭证或运行方向核对不正确，不能确认发车手信号。');
       s.handSignalConfirmed = true; this.syncAuthority(); this.emit('发车手信号已确认，具备发车条件。'); return true;
     }
     if (id === 'power-cabinet-switch') {
@@ -340,13 +364,14 @@ export class TrainSimulation {
       const next = clamp(Number(value), -8, 7);
       if (next - s.traction > 1) s.abrupt += 1;
       this.invalidateInitialCheck('traction');
-      s.traction = next;
-      const tractionBlocked = next > 0 && (!s.authority || !s.horn || !s.headlight || s.direction !== 'F' || s.parkingBrake || s.autoBrake > 0 || s.independentBrake > 0 || s.brakeCyl > 15 || !s.mainBreaker);
-      if (tractionBlocked) {
+      const blockers = next > 0 ? this.tractionInterlockReasons() : [];
+      if (blockers.length) {
+        s.traction = 0;
         s.rejected += 1;
-        this.emit(`牵引手柄已置于 ${next} 级，但牵引联锁未满足，暂不输出牵引力。`);
+        this.emit(`牵引未投入：${blockers.join('；')}。请确认后重新由零位推至低级位。`);
         return false;
       }
+      s.traction = next;
       this.emit(next > 0 ? `牵引手柄置于 ${next} 级。` : next < 0 ? `电制动置于 ${Math.abs(next)} 级。` : '牵引手柄已回零。'); return true;
     }
     return false;
@@ -371,8 +396,9 @@ export class TrainSimulation {
     // 停放制动为独立的弹簧储能制动，不应冒充空气制动缸压力；否则大闸缓解试验会永远无法完成。
     const autoCyl = s.mainRes > 600 ? clamp((600 - s.trainPipe) * (350 / 170), 0, 350) : 0; const individualCyl = s.independentBrake * 60;
     const cylTarget = Math.max(autoCyl, individualCyl); s.brakeCyl += (cylTarget - s.brakeCyl) * Math.min(1, dt * 2.3);
-    if (s.brakeTested && s.autoBrake === 0 && s.trainPipe > 570 && s.brakeCyl < 40) s.releaseObserved = true;
-    const tractionAllowed = s.mainBreaker && s.authority && s.horn && s.headlight && s.direction === 'F' && !s.parkingBrake && s.autoBrake === 0 && s.independentBrake === 0 && s.brakeCyl < 15;
+    // “制动缓解完成”与牵引联锁使用同一压力阈值，避免流程已变绿但牵引仍被残压阻断。
+    if (s.brakeTested && s.autoBrake === 0 && s.trainPipe > 570 && s.brakeCyl < TRACTION_BRAKE_CYL_MAX) s.releaseObserved = true;
+    const tractionAllowed = this.tractionInterlockReasons().length === 0;
     s.tractionForce = tractionAllowed && s.traction > 0 ? s.traction * 68000 * Math.max(.34, 1 - s.speed / 125) : 0;
     const electricBrake = s.traction < 0 ? Math.abs(s.traction) * 43000 : 0;
     const parkingBrakeForce = s.parkingBrake ? 450000 : 0;

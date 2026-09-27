@@ -6,7 +6,7 @@ export const PROCEDURE = [
   ['简略制动机试验：减压并确认制动', s => s.brakeTested, 8],
   ['大闸回运转位并确认缓解', s => s.releaseObserved, 7],
   ['缓解停放制动', s => !s.parkingBrake, 5],
-  ['确认本场景行车凭证及开车通知', s => s.credentialConfirmed, 20, s => s.credentialCorrect],
+  ['确认本场景行车凭证、开车通知及发车手信号', s => s.credentialConfirmed && (!s.handSignalRequired || s.handSignalConfirmed) && (s.credentialCorrect || s.trainingMode === 'assessment'), 20, s => s.credentialCorrect && (!s.handSignalRequired || s.handSignalConfirmed)],
   ['开启前照灯并鸣笛', s => s.headlight && s.horn, 5],
   ['方向手柄置前进', s => s.direction === 'F', 3],
   ['低级位平稳起动', s => s.speed >= 5 && s.traction > 0, 4],
