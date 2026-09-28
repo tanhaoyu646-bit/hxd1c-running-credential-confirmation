@@ -22,6 +22,8 @@
 
 教学／考评窗口只负责模式和场景选择。地面信号、机车信号、LKJ、CIR、列尾风压和送交司机的纸质行车凭证均从驾驶台对应对象直接操作。
 
+LKJ 显示比例与状态栏以原实训系统 `模拟演练/MainImg/LKJ/LKJ.jpg` 为画面基准；驾驶台机械风压表、绿色双针风压表和速度表使用原 HXD1C CABVIEW 指针资源。CIR 热区位于驾驶台最右侧竖排红色按钮区域，不覆盖左侧风压表。
+
 绿色许可证和电话闭塞路票场景在凭证核对后还必须完成LKJ非正常行车解锁；正常和天气场景不要求该解锁。
 
 ## 运行与发布
@@ -35,3 +37,5 @@ GitHub Pages：<https://tanhaoyu646-bit.github.io/hxd1c-running-credential-confi
 ## 回滚基线
 
 专业化设备交互改造前的完整版本已固化为 Git 标签 `baseline-before-professional-equipment-flow-20260928`（提交 `f27c227`）。
+
+本轮 LKJ、CIR 热区和仪表指针对齐前的线上版本已固化为 Git 标签 `baseline-before-lkj-cir-gauge-alignment-20260928`（提交 `c06e5d8`）。

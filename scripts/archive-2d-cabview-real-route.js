@@ -1,8 +1,8 @@
-import { TrainSimulation } from './dynamics.js?rev=professional-equipment-v2-20260928';
-import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=professional-equipment-v2-20260928';
-import { MstsRouteScene } from './mstsRouteScene.js?rev=professional-equipment-v2-20260928';
-import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=professional-equipment-v2-20260928';
-import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=professional-equipment-v2-20260928';
+import { TrainSimulation } from './dynamics.js?rev=lkj-cir-gauge-alignment-v1-20260928';
+import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=lkj-cir-gauge-alignment-v1-20260928';
+import { MstsRouteScene } from './mstsRouteScene.js?rev=lkj-cir-gauge-alignment-v1-20260928';
+import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=lkj-cir-gauge-alignment-v1-20260928';
+import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=lkj-cir-gauge-alignment-v1-20260928';
 
 const $ = (q) => document.querySelector(q);
 const sim = new TrainSimulation();
@@ -39,6 +39,7 @@ const CIR_SRC='./assets/cir/CIR-simulator.html';
 const CIR_RENDER_WIDTH=918;
 const CIR_RENDER_HEIGHT=600;
 let cirBridgeReady=false;
+let cirBridgeTimer=null;
 let cirDelayedPressure=null;
 let cirStationSelected=false;
 let cirAudioTask='';
@@ -74,7 +75,7 @@ function makeSprite(id, image, x, y, w, h, cols, rows, label) { const el=documen
 function makeTouchTarget(id, x, y, w, h, label) { const el=document.createElement('button'); el.type='button'; el.className=`touch-target ${id==='direction'?'direction-target':''}`; el.dataset.dragTarget=id; el.setAttribute('aria-label',label); el.style.left=pct(x,640); el.style.top=pct(y,480); el.style.width=pct(w,640); el.style.height=pct(h,480); overlay.append(el); return el; }
 function makeHotspot(id,label,x,y,w,h) { const el=document.createElement('button'); el.className='hotspot'; el.dataset.id=id; el.dataset.label=label; el.style.left=pct(x,640); el.style.top=pct(y,480); el.style.width=pct(w,640); el.style.height=pct(h,480); el.addEventListener('click',()=>command(id)); overlay.append(el); return el; }
 function makePhysicalButton(id,label,x,y,w,h,action) { const el=document.createElement('button'); el.type='button'; el.className=`physical-control-hotspot ${id}`; el.dataset.label=label; el.setAttribute('aria-label',label); el.style.left=pct(x,640); el.style.top=pct(y,480); el.style.width=pct(w,640); el.style.height=pct(h,480); if(action)action(el); else el.addEventListener('click',()=>command(id)); overlay.append(el); return el; }
-function makeNeedle(id,image,x,y,w,h,pivot,start,end,kind='') { const el=document.createElement('span'); const color=image.includes('_red')?'red':''; el.className=`needle ${kind} ${color}`; el.dataset.id=id; el.dataset.start=start; el.dataset.end=end; el.setAttribute('aria-hidden','true'); el.style.left=pct(x,640); el.style.top=pct(y,480); el.style.width=pct(w,640); el.style.height=pct(h,480); el.style.transformOrigin=`50% ${pivot / h * 100}%`; overlay.append(el); return el; }
+function makeNeedle(id,image,x,y,w,h,pivot,start,end,kind='') { const el=document.createElement('img'); el.className=`needle original-game-needle ${kind}`; el.dataset.id=id; el.dataset.start=start; el.dataset.end=end; el.src=`./assets/archive-cabview/${image}`; el.alt=''; el.setAttribute('aria-hidden','true'); el.style.left=pct(x,640); el.style.top=pct(y,480); el.style.width=pct(w,640); el.style.height=pct(h,480); el.style.transformOrigin=`50% ${pivot / h * 100}%`; overlay.append(el); return el; }
 function makeBar(id,x,y,w,h,color='#5dffd5') { const el=document.createElement('div'); el.className='gauge-bar'; el.dataset.id=id; el.style.left=pct(x,640); el.style.top=pct(y,480); el.style.width=pct(w,640); el.style.height=pct(h,480); el.style.background=color; overlay.append(el); return el; }
 function makeDigital(id,x,y,w,h,kind='') { const el=document.createElement('div'); el.className=`digital ${kind}`; el.dataset.id=id; el.style.left=pct(x,640); el.style.top=pct(y,480); el.style.width=pct(w,640); el.style.height=pct(h,480); overlay.append(el); return el; }
 function makePositionBadge(id,label,x,y,w=82) { const el=document.createElement('button');const checkId={auto:'autoBrake',independent:'independentBrake',traction:'traction',direction:'direction'}[id];el.type='button';el.className='control-position-badge';el.dataset.positionId=id;el.setAttribute('aria-label',`核对${label}初始位置`);el.style.left=pct(x,640);el.style.top=pct(y,480);el.style.width=pct(w,640);el.innerHTML=`<b>${label}</b><span>—</span>`;el.addEventListener('click',(event)=>{event.preventDefault();if(!sim.state.lkjConfirmed)command('initial-inspect',checkId);});overlay.append(el);return el; }
@@ -101,7 +102,8 @@ function createFront() {
   // 电气与辅助设备通过右侧经过命名校验的操作按钮控制，车内只保留 CVF 明确定义的复位热区。
   elements.reset=makeHotspot('reset','警惕/复位',386,312,32,32);
   makePhysicalButton('lkj-trigger','放大 LKJ 监控装置',210,226,101,94,(el)=>el.addEventListener('click',openLkj));
-  elements.cirButton=makePhysicalButton('cir-hotspot','打开CIR机车综合无线通信设备',4,246,112,78,(el)=>el.addEventListener('click',openCir));
+  // CIR 操作区位于驾驶台最右侧竖排红色按钮处；左侧机械风压表不得覆盖热区。
+  elements.cirButton=makePhysicalButton('cir-hotspot','打开CIR机车综合无线通信设备',606,276,34,118,(el)=>el.addEventListener('click',openCir));
   elements.locomotiveSignalButton=makePhysicalButton('locomotive-signal-hotspot','确认机车信号显示',540,0,100,162,(el)=>el.addEventListener('click',confirmLocomotiveSignal));
   elements.credentialPaper=makePhysicalButton('credential-paper-hotspot','查看送交的行车凭证',258,365,104,72,(el)=>el.addEventListener('click',openDeliveredCredential));
   elements.parkingApply=makePhysicalButton('parking-apply','停放制动施加（红）',157,350,21,29,(el)=>el.addEventListener('click',()=>{if(command('parking-apply')&&!sim.state.lkjConfirmed)command('initial-inspect','parkingBrake');}));
@@ -350,6 +352,12 @@ function installCirBridge(){
   try{if(Array.isArray(w.mmiinfo)){w.mmiinfo[2]='H2026';w.mmiinfo[3]=String(Math.max(0,Math.round(sim.state.tailPipe))).padStart(4,'0');}}catch{}
   cirBridgeReady=true;cirRoot.querySelector('.cir-loading')?.setAttribute('hidden','hidden');syncCirPressure(true);renderCirWorkflow();
 }
+function ensureCirBridge(){
+  clearTimeout(cirBridgeTimer);cirBridgeTimer=null;
+  if(!cirRoot?.classList.contains('open')||cirBridgeReady)return;
+  installCirBridge();
+  if(!cirBridgeReady)cirBridgeTimer=setTimeout(ensureCirBridge,100);
+}
 function syncCirPressure(force=false){
   if(!cirBridgeReady)return;const w=cirWindow();if(!w)return;const source=force||cirDelayedPressure==null?sim.state.tailPipe:cirDelayedPressure;const value=Math.max(0,Math.round(source));
   try{if(Array.isArray(w.mmiinfo))w.mmiinfo[3]=String(value).padStart(4,'0').slice(-4);const shown=w.document?.getElementById('lwfyvalue');if(shown)shown.textContent=String(value);}catch{}
@@ -399,9 +407,9 @@ function renderCirWorkflow(){
 function openCir(){
   if(!cirRoot)buildCir();closeLkj();closeSignalInspection();closeCredentialModal();closeSwitchPanel();
   const frame=cirRoot.querySelector('.cir-frame');if(!frame.dataset.loaded){frame.dataset.loaded='1';frame.src=CIR_SRC;}
-  cirRoot.classList.add('open');cirRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderCirWorkflow();requestAnimationFrame(fitCirFrame);
+  cirRoot.classList.add('open');cirRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderCirWorkflow();requestAnimationFrame(()=>{fitCirFrame();ensureCirBridge();});
 }
-function closeCir(){if(!cirRoot)return;cirRoot.classList.remove('open');cirRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
+function closeCir(){if(!cirRoot)return;clearTimeout(cirBridgeTimer);cirBridgeTimer=null;cirRoot.classList.remove('open');cirRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
 function buildCredentialModal(){
   const root=document.createElement('div');root.className='device-modal credential-modal';root.setAttribute('aria-hidden','true');
   root.innerHTML=`<div class="device-shell credential-shell" role="dialog" aria-modal="true" aria-label="送交司机的纸质行车凭证"><div class="device-head"><div><strong>送交司机的纸质行车凭证</strong><span>从驾驶台凭证位置打开；联控、调度命令和发车通知在CIR办理。</span></div><button type="button" class="device-close" aria-label="关闭">×</button></div><div class="credential-body"></div></div>`;

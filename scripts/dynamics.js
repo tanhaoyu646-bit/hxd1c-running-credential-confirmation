@@ -1,5 +1,5 @@
-import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=professional-equipment-v2-20260928';
-import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=professional-equipment-v2-20260928';
+import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=lkj-cir-gauge-alignment-v1-20260928';
+import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=lkj-cir-gauge-alignment-v1-20260928';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const TRACTION_BRAKE_CYL_MAX = 15;

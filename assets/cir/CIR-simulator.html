@@ -4,6 +4,19 @@
         <meta lang="zh">
         <title>CIR-simulator</title>
         <link rel="stylesheet" href="./CSS/CIR-MMI-SIMULATOR.css">
+        <script>
+            // 浏览器会拒绝非用户手势触发的提示音；消化该拒绝，避免设备逻辑被未处理异常干扰。
+            (function () {
+                var media = window.HTMLMediaElement && window.HTMLMediaElement.prototype;
+                if (!media || media.__credentialSafePlay) return;
+                var originalPlay = media.play;
+                media.play = function () {
+                    var pending = originalPlay.apply(this, arguments);
+                    return pending && pending.catch ? pending.catch(function () {}) : pending;
+                };
+                media.__credentialSafePlay = true;
+            }());
+        </script>
     </head>
     
     <body>

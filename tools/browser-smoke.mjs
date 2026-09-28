@@ -120,7 +120,10 @@ const interactionChecks = await evaluate(`(() => {
   document.querySelector('.signal-modal .device-close').click();
   const cirDeviceAvailable = Boolean(document.querySelector('.cir-frame'));
   const locomotiveSignalClickable = Boolean(document.querySelector('.locomotive-signal-hotspot'));
-  return { dispatchOrderForm, routeTicketForm, greenPermitForm, firstOpen, queryReview, reopenMonitor, signalClickOpens, cirDeviceAvailable, locomotiveSignalClickable };
+  const cirHotspotRight = parseFloat(document.querySelector('.cir-hotspot')?.style.left || '0') > 90;
+  const originalGameNeedles = document.querySelectorAll('img.original-game-needle').length === 9;
+  const lkjReferenceScreen = getComputedStyle(document.querySelector('.lkj-screen')).backgroundImage.includes('LKJ2000-monitor-reference.jpg');
+  return { dispatchOrderForm, routeTicketForm, greenPermitForm, firstOpen, queryReview, reopenMonitor, signalClickOpens, cirDeviceAvailable, locomotiveSignalClickable, cirHotspotRight, originalGameNeedles, lkjReferenceScreen };
 })()`);
 const cirTailQuery = await evaluate(`new Promise((resolve) => {
   document.querySelector('[data-scenario="normal"]').click();
@@ -129,7 +132,7 @@ const cirTailQuery = await evaluate(`new Promise((resolve) => {
   const waitForCir = setInterval(() => {
     const frame = document.querySelector('.cir-frame');
     const win = frame && frame.contentWindow;
-    if (!win || !Array.isArray(win.mmiinfo) || typeof win.buttonfix !== 'function') {
+    if (!win || !Array.isArray(win.mmiinfo) || typeof win.buttonfix !== 'function' || !win.__credentialCirBridge) {
       if (Date.now() - started > 6000) { clearInterval(waitForCir); resolve(false); }
       return;
     }
