@@ -26,6 +26,8 @@ function prepare(id, mode = 'teaching') {
 }
 
 function authorize(sim, id) {
+  assert.equal(sim.command('tail-link', '123456'), true);
+  assert.equal(sim.command('tail-query', sim.state.tailPipe), true);
   if (id === 'normal') {
     assert.equal(sim.command('station-contact'), true);
     assert.equal(sim.command('signal-answer', 'green'), true);
@@ -117,7 +119,7 @@ assert.equal(assessedWrong.command('lkj-special-unlock', false), true);
 assert.equal(assessedWrong.command('departure-notice'), true);
 assert.equal(assessedWrong.command('hand-signal-confirm'), true);
 assert.equal(procedureState(assessedWrong.state).complete[7], true, '考评模式错误操作应记录后继续流程');
-assert.equal(scoreRun(assessedWrong.state).itemScores[7].earned, 6, '第8项应仅保留发车通知和手信号的分值');
+assert.equal(scoreRun(assessedWrong.state).itemScores[7].earned, 5, '第8项应仅保留发车通知和手信号的分值');
 
 const assessmentSoftGate = new TrainSimulation();
 assert.equal(assessmentSoftGate.command('training-mode', 'assessment'), true);
@@ -139,6 +141,8 @@ for (let index = 0; index < 200000 && !assessmentSoftGate.state.completed; index
 assert.equal(assessmentSoftGate.state.completed, true, '考评模式流程不完整时仍应能到达训练终点并结算');
 
 const mismatch = prepare('weather');
+mismatch.command('tail-link', '123456');
+mismatch.command('tail-query', mismatch.state.tailPipe);
 mismatch.command('order-sign');
 mismatch.command('locomotive-signal-answer', 'green');
 mismatch.command('weather-report');

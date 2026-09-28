@@ -1,5 +1,5 @@
-import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=lkj-nonnormal-v2-20260928';
-import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=lkj-nonnormal-v2-20260928';
+import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=professional-equipment-v1-20260928';
+import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=professional-equipment-v1-20260928';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const TRACTION_BRAKE_CYL_MAX = 15;
@@ -35,10 +35,13 @@ export class TrainSimulation {
       parkingBrake: true, authority: false, trainingMode: 'teaching', signalAspect: 'green', signalObserved: false, signalAnswer: null,
       signalMeaningCorrect: false, handSignalRequired: true, handSignalConfirmed: false,
       scenarioId: 'normal', scenarioSelected: false, credentialStage: 'select',
-      radioContacted: false, orderSigned: false, credentialPresented: false,
+      radioContacted: false, radioResponseAttempted: false, radioResponseCorrect: false,
+      orderSigned: false, credentialPresented: false,
       credentialAttempted: false, credentialCorrect: false, credentialConfirmed: false,
       directionObserved: false, directionCorrect: false, locomotiveSignalObserved: false,
       weatherReportSent: false, departureNoticeReceived: false, limitedStart: false,
+      tailDeviceId: '', tailDeviceLinked: false, tailQueryAttempted: false,
+      tailPressureQueried: false, tailPressureValue: null, tailQueryCount: 0,
       signalMismatch: false, signalPassed: false, completed: false,
       headlight: false, horn: false, hornActive: false, vigilanceAcknowledged: false, direction: 'N',
       auxiliaryLight: false, markerFront: '0', markerRear: '0', cabLight: false,
@@ -46,7 +49,7 @@ export class TrainSimulation {
       autoBrake: 0, independentBrake: 0, traction: 0,
       // HXD1C 原游戏 .eng：总风 108.78～130.53 psi（约 750～900 kPa），
       // 列车管/均衡风缸运转压力 87.02 psi（约 600 kPa）。
-      mainRes: 750, equalizingRes: 600, trainPipe: 600, brakeCyl: 0,
+      mainRes: 750, equalizingRes: 600, trainPipe: 600, tailPipe: 598, brakeCyl: 0,
       initialChecks: Object.fromEntries(Object.keys(INITIAL_CHECK_LABELS).map((key) => [key, false])),
       netVoltage: 0, speed: 0, distance: 0, tractionForce: 0, brakeForce: 0,
       brakeTested: false, releaseObserved: false, lowNotchStartConfirmed: false, elapsed: 0,
@@ -114,6 +117,7 @@ export class TrainSimulation {
     for (const [index, correct, reason] of checks) if (!correct) this.lockAssessmentScore(index, reason);
     if (!s.credentialCorrect) this.lockAssessmentCredential('credential', `${scenario.label}行车凭证未正确确认即动车`);
     if (!s.departureNoticeReceived && scenario.id !== 'normal') this.lockAssessmentCredential('notice', '未接收发车通知即动车');
+    if (!s.tailPressureQueried) this.lockAssessmentCredential('tail', '未通过CIR查询列尾风压即动车');
     if (s.handSignalRequired && !s.handSignalConfirmed) this.lockAssessmentCredential('handSignal', '未确认发车手信号即动车');
     if (s.lkjUnlockRequired && !s.lkjUnlockMethodCorrect) this.lockAssessmentCredential('method', '未正确选择LKJ非正常行车方式即动车');
     if (s.lkjUnlockRequired && !s.lkjUnlockFieldsCorrect) this.lockAssessmentCredential('fields', '未正确输入LKJ非正常行车编号即动车');
@@ -139,17 +143,18 @@ export class TrainSimulation {
     const scenario = getScenario(s.scenarioId);
     const lkjReady = this.lkjWorkflowReady();
     const specialUnlockReady = !s.lkjUnlockRequired || s.lkjUnlockCorrect || (this.isAssessment() && s.lkjUnlockAttempted);
+    const tailReady = s.tailPressureQueried || this.isAssessment();
     if (scenario.id === 'normal') {
       s.credentialConfirmed = Boolean(s.radioContacted && s.signalObserved && s.directionObserved);
-      s.credentialCorrect = Boolean(s.radioContacted && s.signalMeaningCorrect && s.directionCorrect);
-      s.authority = Boolean(lkjReady && s.credentialConfirmed && specialUnlockReady && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
+      s.credentialCorrect = Boolean(s.radioContacted && s.radioResponseCorrect && s.signalMeaningCorrect && s.directionCorrect);
+      s.authority = Boolean(lkjReady && tailReady && s.credentialConfirmed && specialUnlockReady && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
     } else if (scenario.id === 'weather') {
       s.credentialConfirmed = Boolean(s.orderSigned && s.locomotiveSignalObserved && s.weatherReportSent && s.departureNoticeReceived);
       s.credentialCorrect = Boolean(s.credentialConfirmed && !s.signalMismatch);
-      s.authority = Boolean(lkjReady && s.credentialConfirmed && specialUnlockReady && !s.signalMismatch && (!s.handSignalRequired || s.handSignalConfirmed));
+      s.authority = Boolean(lkjReady && tailReady && s.credentialConfirmed && specialUnlockReady && !s.signalMismatch && (!s.handSignalRequired || s.handSignalConfirmed));
     } else {
       s.credentialConfirmed = Boolean(s.credentialAttempted && s.departureNoticeReceived);
-      s.authority = Boolean(lkjReady && s.credentialConfirmed && specialUnlockReady && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
+      s.authority = Boolean(lkjReady && tailReady && s.credentialConfirmed && specialUnlockReady && (s.credentialCorrect || this.isAssessment()) && (!s.handSignalRequired || s.handSignalConfirmed));
     }
   }
   command(id, value) {
@@ -180,7 +185,7 @@ export class TrainSimulation {
       s.scenarioSelected = true;
       s.signalAspect = scenario.signalAspect;
       s.signalObserved = false; s.signalAnswer = null; s.signalMeaningCorrect = false;
-      s.credentialStage = 'prepare'; s.radioContacted = false; s.orderSigned = false;
+      s.credentialStage = 'prepare'; s.radioContacted = false; s.radioResponseAttempted = false; s.radioResponseCorrect = false; s.orderSigned = false;
       s.credentialPresented = false; s.credentialAttempted = false; s.credentialCorrect = false;
       s.directionObserved = false; s.directionCorrect = false; s.locomotiveSignalObserved = false;
       s.weatherReportSent = false; s.departureNoticeReceived = false; s.limitedStart = false;
@@ -198,13 +203,52 @@ export class TrainSimulation {
       this.emit(`已选择“${scenario.label}”场景：${scenario.description}`);
       return true;
     }
+    if (id === 'tail-link') {
+      const tailId = String(value || '').replace(/\D/g, '').slice(0, 6);
+      if (tailId.length !== 6) return this.reject('列尾装置ID应为6位数字。');
+      s.tailDeviceId = tailId;
+      s.tailDeviceLinked = true;
+      s.tailQueryAttempted = false;
+      s.tailPressureQueried = false;
+      s.tailPressureValue = null;
+      this.syncAuthority();
+      this.emit(`列尾装置 ${tailId} 已建立连接。`);
+      return true;
+    }
+    if (id === 'tail-unlink') {
+      s.tailDeviceLinked = false;
+      s.tailPressureQueried = false;
+      s.tailPressureValue = null;
+      this.syncAuthority();
+      this.emit('列尾装置已销号。');
+      return true;
+    }
+    if (id === 'tail-query') {
+      s.tailQueryAttempted = true;
+      if (!s.tailDeviceLinked) return this.reject('列尾装置尚未建立连接，请先输入6位列尾ID。');
+      const pressure = Number.isFinite(Number(value)) ? Number(value) : s.tailPipe;
+      s.tailPressureValue = Math.max(0, Math.round(pressure));
+      s.tailPressureQueried = s.tailPressureValue >= 560 && s.tailPressureValue <= 620;
+      s.tailQueryCount += 1;
+      this.syncAuthority();
+      if (!s.tailPressureQueried && !this.isAssessment()) return this.reject(`列尾风压 ${s.tailPressureValue} kPa 不在本次训练确认范围内，请检查列车管状态后重新查询。`);
+      this.emit(s.tailPressureQueried
+        ? `CIR列尾风压查询完成：${s.tailPressureValue} kPa。`
+        : `列尾风压 ${s.tailPressureValue} kPa，异常结果已记录；考评流程继续。`);
+      return true;
+    }
     if (id === 'station-contact') {
       if (!s.scenarioSelected) return this.reject('请先选择训练场景。');
       const scenario = getScenario(s.scenarioId);
       if (scenario.id === 'weather' || scenario.id === 'routeTicket') return this.reject('本场景应先确认调度命令。');
+      const correct = value !== false;
+      s.radioResponseAttempted = true;
+      if (!correct && !this.isAssessment()) return this.reject('联控复诵内容不正确，请根据车站值班员来话重新应答。');
       s.radioContacted = true;
+      s.radioResponseCorrect = correct;
+      if (!correct) this.lockAssessmentCredential('credential', '车机联控复诵错误');
       s.credentialStage = scenario.id === 'normal' ? 'observe-signal' : 'check-credential';
-      this.emit('车站联控录音已播放；联控应答完成。请继续按当前场景确认。');
+      this.emit(correct ? '车站联控复诵完成。请继续按当前场景确认。' : '车机联控复诵错误已记录；考评流程继续。');
       return true;
     }
     if (id === 'order-sign') {
@@ -216,17 +260,23 @@ export class TrainSimulation {
       return true;
     }
     if (id === 'locomotive-signal-answer') {
-      if (s.scenarioId !== 'weather' || !s.orderSigned) return this.reject('请先签收天气恶劣行车调度命令。');
-      s.locomotiveSignalObserved = value === 'green';
-      if (!s.locomotiveSignalObserved) return this.reject('本教学情境中机车信号为绿灯，请重新确认。');
-      s.credentialStage = 'report-ground-unavailable';
-      this.emit('已确认机车信号绿灯。请报告地面出站信号无法辨认。');
+      if (!s.scenarioSelected) return this.reject('请先选择训练场景。');
+      if (s.scenarioId === 'weather' && !s.orderSigned) return this.reject('请先在CIR签收天气恶劣行车调度命令。');
+      const expected = s.scenarioId === 'weather' ? 'green' : s.signalAspect;
+      s.locomotiveSignalObserved = value === expected;
+      if (!s.locomotiveSignalObserved) return this.reject(`机车信号显示确认不正确，当前应为${SIGNAL_ASPECTS[expected]?.label || '规定显示'}。`);
+      if (s.scenarioId === 'weather') {
+        s.credentialStage = 'report-ground-unavailable';
+        this.emit('已在驾驶台直接确认机车信号绿灯。请通过CIR报告地面出站信号无法辨认。');
+      } else {
+        this.emit(`已在驾驶台直接确认机车信号${SIGNAL_ASPECTS[expected]?.label || ''}。`);
+      }
       return true;
     }
     if (id === 'weather-report') {
       if (s.scenarioId !== 'weather' || !s.locomotiveSignalObserved) return this.reject('请先确认机车信号。');
       s.weatherReportSent = true; s.departureNoticeReceived = true; s.limitedStart = true; s.credentialStage = 'limited-start';
-      this.syncAuthority(); this.emit('已报告地面出站信号无法辨认；已收到发车通知，按机车信号低速起动。');
+      this.syncAuthority(); this.emit('已通过CIR报告地面出站信号无法辨认并收到发车通知；按机车信号低速起动。');
       return true;
     }
     if (id === 'credential-open') {
@@ -510,6 +560,8 @@ export class TrainSimulation {
     const emergencyBrake = s.autoBrake >= 5;
     s.equalizingRes += (equalizingTarget - s.equalizingRes) * Math.min(1, dt * (emergencyBrake ? 5.5 : s.autoBrake > 0 ? 2.4 : .75));
     s.trainPipe += (s.equalizingRes - s.trainPipe) * Math.min(1, dt * (emergencyBrake ? 4.2 : s.autoBrake > 0 ? 1.45 : .48));
+    // 尾部列车管压力滞后于机车端，供CIR列尾查询读取；不得直接复用机车端列车管数值。
+    s.tailPipe += (s.trainPipe - s.tailPipe) * Math.min(1, dt * (emergencyBrake ? .9 : .34));
     // 停放制动为独立的弹簧储能制动，不应冒充空气制动缸压力；否则大闸缓解试验会永远无法完成。
     const autoCyl = s.mainRes > 600 ? clamp((600 - s.trainPipe) * (350 / 170), 0, 350) : 0; const individualCyl = s.independentBrake * 60;
     const cylTarget = Math.max(autoCyl, individualCyl); s.brakeCyl += (cylTarget - s.brakeCyl) * Math.min(1, dt * 2.3);

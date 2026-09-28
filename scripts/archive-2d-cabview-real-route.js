@@ -1,8 +1,8 @@
-import { TrainSimulation } from './dynamics.js?rev=lkj-nonnormal-v2-20260928';
-import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=lkj-nonnormal-v2-20260928';
-import { MstsRouteScene } from './mstsRouteScene.js?rev=lkj-nonnormal-v2-20260928';
-import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=lkj-nonnormal-v2-20260928';
-import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=lkj-nonnormal-v2-20260928';
+import { TrainSimulation } from './dynamics.js?rev=professional-equipment-v1-20260928';
+import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=professional-equipment-v1-20260928';
+import { MstsRouteScene } from './mstsRouteScene.js?rev=professional-equipment-v1-20260928';
+import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=professional-equipment-v1-20260928';
+import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=professional-equipment-v1-20260928';
 
 const $ = (q) => document.querySelector(q);
 const sim = new TrainSimulation();
@@ -30,10 +30,19 @@ let powerCabinetRoot = null;
 let lkjRoot = null;
 let signalRoot = null;
 let credentialRoot = null;
+let cirRoot = null;
 let resultRoot = null;
 let resultShown = false;
 let signalTarget = null;
 let handSignalCard = null;
+const CIR_SRC='./assets/cir/CIR-simulator.html';
+const CIR_RENDER_WIDTH=918;
+const CIR_RENDER_HEIGHT=600;
+let cirBridgeReady=false;
+let cirDelayedPressure=null;
+let cirStationSelected=false;
+let cirAudioTask='';
+let cirNotice='';
 const INITIAL_CHECKS = [
   ['traction', '牵引手柄', '零位'], ['direction', '换向手柄', '中立位'],
   ['autoBrake', '自动制动阀', '运转位'], ['independentBrake', '单独制动阀', '缓解位'],
@@ -92,6 +101,9 @@ function createFront() {
   // 电气与辅助设备通过右侧经过命名校验的操作按钮控制，车内只保留 CVF 明确定义的复位热区。
   elements.reset=makeHotspot('reset','警惕/复位',386,312,32,32);
   makePhysicalButton('lkj-trigger','放大 LKJ 监控装置',210,226,101,94,(el)=>el.addEventListener('click',openLkj));
+  elements.cirButton=makePhysicalButton('cir-hotspot','打开CIR机车综合无线通信设备',4,246,112,78,(el)=>el.addEventListener('click',openCir));
+  elements.locomotiveSignalButton=makePhysicalButton('locomotive-signal-hotspot','确认机车信号显示',540,0,100,162,(el)=>el.addEventListener('click',confirmLocomotiveSignal));
+  elements.credentialPaper=makePhysicalButton('credential-paper-hotspot','查看送交的行车凭证',258,365,104,72,(el)=>el.addEventListener('click',openDeliveredCredential));
   elements.parkingApply=makePhysicalButton('parking-apply','停放制动施加（红）',157,350,21,29,(el)=>el.addEventListener('click',()=>{if(command('parking-apply')&&!sim.state.lkjConfirmed)command('initial-inspect','parkingBrake');}));
   elements.parkingRelease=makePhysicalButton('parking-release','停放制动缓解（绿）',179,350,22,29);
   elements.hornButton=makePhysicalButton('horn-button','风笛（按住）',577,408,37,39,(el)=>{
@@ -208,7 +220,7 @@ function handleLkjKey(id){
     if(id==='unlock'){lkjUnlockArmedUntil=performance.now()+2000;lkjNotice='解锁键已按下，请在2秒内按【确认】';renderLkj();return;}
     if(id==='right'){
       const combined=performance.now()<=lkjUnlockArmedUntil;const accepted=sim.command('lkj-special-unlock',combined);
-      if(accepted){lkjPhase='done';lkjUnlockArmedUntil=0;lkjNotice='';renderLkj();closeLkj();openCredentialModal();}else{lkjUnlockArmedUntil=0;renderLkj();}return;
+      if(accepted){lkjPhase='done';lkjUnlockArmedUntil=0;lkjNotice='';renderLkj();closeLkj();openCir();}else{lkjUnlockArmedUntil=0;renderLkj();}return;
     }
     if(id==='left'||id==='relief'){lkjPhase='nonnormal-input';renderLkj();return;}
     flashLkj('先按【解锁】，再在2秒内按【确认】。');return;
@@ -237,40 +249,39 @@ function handleLkjKey(id){
     flashLkj('按【→】逐条核对运行揭示');
   }
 }
+function lkjView(body,title='LKJ2000监控装置'){
+  const scenario=getScenario(sim.state.scenarioId);const limit=sim.state.lkjUnlockCorrect&&sim.state.lkjUnlockLimit?sim.state.lkjUnlockLimit:scenario.requiresLkjUnlock?20:30;
+  return `<div class="lkj-instrument-row"><i class="aspect ${sim.state.signalAspect}"></i><span><small>速度</small><b>${sim.state.speed.toFixed(0)}</b></span><span><small>限速</small><b>${limit}</b></span><span><small>距离</small><b>${Math.max(0,Math.round(ROUTE_CONTEXT.departureSignalDistance-sim.state.distance))}</b></span><span class="station"><small>信号／公里标</small><b>株洲　${sim.state.distance.toFixed(3)}</b></span><time>${new Date().toLocaleTimeString('zh-CN',{hour12:false})}</time></div><div class="lkj-titlebar">${title}</div><div class="lkj-screen-body">${body}</div><div class="lkj-soft-status"><span>纵断面</span><span>曲线</span><span>道岔</span></div>`;
+}
 function renderLkj(){
-  if(!lkjRoot)return;const screen=lkjRoot.querySelector('.lkj-screen');
-  const scenario=getScenario(sim.state.scenarioId);
+  if(!lkjRoot)return;const screen=lkjRoot.querySelector('.lkj-screen');const scenario=getScenario(sim.state.scenarioId);
   if(lkjPhase==='nonnormal-menu'){
-    screen.innerHTML=`<b>非正常行车确认</b><span>请选择确认方式：</span><div class="lkj-menu">${LKJ_NONNORMAL_OPTIONS.map(([key,label],index)=>`<span class="${index===lkjMenuIndex?'selected':''}">${index===LKJ_NONNORMAL_OPTIONS.length-1?'0':index+1}. ${label}</span>`).join('')}</div><span class="lkj-help">【↑↓】选择　【确认】进入　【←】返回</span>`;return;
+    screen.innerHTML=lkjView(`<p>请选择确认方式：</p><div class="lkj-menu">${LKJ_NONNORMAL_OPTIONS.map(([key,label],index)=>`<span class="${index===lkjMenuIndex?'selected':''}">${index===LKJ_NONNORMAL_OPTIONS.length-1?'0':index+1}. ${label}</span>`).join('')}</div><span class="lkj-help">【↑↓】选择　【确认】进入　【←】返回</span>`,'非正常行车确认');return;
   }
   if(lkjPhase==='nonnormal-input'){
     const selectedScenario=sim.state.lkjUnlockMethod==='greenPermit'?SCENARIOS.greenPermit:sim.state.lkjUnlockMethod==='routeTicket'?SCENARIOS.routeTicket:null;const fields=selectedScenario?.lkjUnlockFields||[];const [, ,target]=fields[lkjUnlockFieldIndex]||['','凭证号码',''];
-    screen.innerHTML=`<b>${selectedScenario?.lkjUnlockLabel||'所选方式'}输入</b><span>所属车站：株洲站</span><div class="lkj-review">${fields.length?fields.map(([field,name],index)=>`<span class="${index===lkjUnlockFieldIndex?'selected':''}">${name}</span><strong class="${index===lkjUnlockFieldIndex?'selected':''}">${lkjUnlockDraft[field]||'_'}</strong>`).join(''):'<span>该方式无编号输入项</span><strong>—</strong>'}</div><span class="lkj-help">${sim.state.trainingMode==='teaching'&&target?`教学值：${target}<br>`:''}数字键输入　【←】删除　【↑↓】换项　【确认】提交</span>`;return;
+    screen.innerHTML=lkjView(`<p>所属车站：株洲站</p><div class="lkj-review">${fields.length?fields.map(([field,name],index)=>`<span class="${index===lkjUnlockFieldIndex?'selected':''}">${name}</span><strong class="${index===lkjUnlockFieldIndex?'selected':''}">${lkjUnlockDraft[field]||'_'}</strong>`).join(''):'<span>该方式无编号输入项</span><strong>—</strong>'}</div><span class="lkj-help">${sim.state.trainingMode==='teaching'&&target?`教学值：${target}<br>`:''}数字键输入　【←】删除　【↑↓】换项　【确认】提交</span>`,`${selectedScenario?.lkjUnlockLabel||'所选方式'}输入`);return;
   }
   if(lkjPhase==='nonnormal-arm'){
     const limit=scenario.lkjUnlockLimit||0;const armed=performance.now()<=lkjUnlockArmedUntil;
-    screen.innerHTML=`<b>${scenario.lkjUnlockLabel}确认</b><span>${(scenario.lkjUnlockFields||[]).map(([key,label])=>`${label} ${lkjUnlockDraft[key]||'—'}`).join('　')}</span><strong class="${armed?'lkj-ok':'lkj-start-ready'}">${armed?'解锁键已按下':'等待组合解锁'}</strong><span class="lkj-help">正确后模式限速 ${limit} km/h<br>${armed?'请立即按【确认】':'先按【解锁】，再在2秒内按【确认】'}${lkjNotice?`<br>${lkjNotice}`:''}</span>`;return;
+    screen.innerHTML=lkjView(`<p>${(scenario.lkjUnlockFields||[]).map(([key,label])=>`${label} ${lkjUnlockDraft[key]||'—'}`).join('　')}</p><strong class="${armed?'lkj-ok':'lkj-start-ready'}">${armed?'解锁键已按下':'等待组合解锁'}</strong><span class="lkj-help">正确后模式限速 ${limit} km/h<br>${armed?'请立即按【确认】':'先按【解锁】，再在2秒内按【确认】'}${lkjNotice?`<br>${lkjNotice}`:''}</span>`,`${scenario.lkjUnlockLabel}确认`);return;
   }
   if(lkjOperational()&&lkjPhase!=='review'){
-    const start=sim.state.lkjStartCorrect;
-    const error=sim.state.lkjStartError;
-    const remaining=Math.round(ROUTE_CONTEXT.departureSignalDistance-sim.state.distance);
+    const start=sim.state.lkjStartCorrect;const error=sim.state.lkjStartError;const remaining=Math.round(ROUTE_CONTEXT.departureSignalDistance-sim.state.distance);
     const status=start?'LKJ 正常监控':error==='missed'||error==='late'?'开车对标错误已记录':'开车对标待执行';
-    const detail=start?'已在规定对标点按压【开车／7】键。':error==='stationary'?'列车尚未起动，不能开车对标。':error==='early'?`距开车对标点约 ${Math.max(0,remaining)} m。`:error==='late'||error==='missed'?'已越过对标点，本项按错误记录。':`列车起动后，在出站信号机对标点按压【开车／7】键。`;
-    const limit=sim.state.lkjUnlockCorrect&&sim.state.lkjUnlockLimit?sim.state.lkjUnlockLimit:scenario.requiresLkjUnlock?20:30;
-    screen.innerHTML=`<b>监控状态</b><div class="lkj-monitor-grid"><span>速度</span><strong>${sim.state.speed.toFixed(1)} km/h</strong><span>限速</span><strong>${limit} km/h</strong><span>距出站信号</span><strong>${Math.max(0,remaining)} m</strong><span>车次</span><strong>${sim.state.lkjData?.trainNo||'—'}</strong></div><strong class="${start?'lkj-ok':error?'lkj-start-error':'lkj-start-ready'}">${status}</strong><span class="lkj-help">${detail}<br>长按【↑】2秒进入非正常行车确认；按【查询】查看参数${lkjNotice?`<br>${lkjNotice}`:''}</span>`;return;
+    const detail=start?'已在规定对标点按压【开车／7】键。':error==='stationary'?'列车尚未起动，不能开车对标。':error==='early'?`距开车对标点约 ${Math.max(0,remaining)} m。`:error==='late'||error==='missed'?'已越过对标点，本项按错误记录。':'列车起动后，在出站信号机对标点按压【开车／7】键。';
+    screen.innerHTML=lkjView(`<div class="lkj-monitor-graph"><svg viewBox="0 0 500 150" preserveAspectRatio="none"><polyline points="0,20 110,20 210,105 500,105"/><line x1="0" y1="132" x2="500" y2="132"/><line x1="${Math.min(490,Math.max(4,sim.state.distance/ROUTE_CONTEXT.departureSignalDistance*390))}" y1="0" x2="${Math.min(490,Math.max(4,sim.state.distance/ROUTE_CONTEXT.departureSignalDistance*390))}" y2="145"/></svg></div><strong class="${start?'lkj-ok':error?'lkj-start-error':'lkj-start-ready'}">${status}</strong><span class="lkj-help">${detail}<br>长按【↑】2秒进入非正常行车确认；按【查询】查看参数${lkjNotice?`<br>${lkjNotice}`:''}</span>`,'监控主界面');return;
   }
-  if(lkjPhase==='done'&&sim.state.lkjAttempted){screen.innerHTML=`<b>参数核对记录</b><span>本次输入存在 ${sim.state.lkjErrors.length} 项不一致</span><strong>考评已记录，允许继续后续作业</strong><span class="lkj-help">本项将在成绩单中按实际正确性计分；按【查询】可重新输入。</span>`;return;}
-  if(lkjPhase==='boot'){screen.innerHTML='<b>LKJ2000</b><span>设备自检正常</span><strong>按【查询】进入参数设定</strong><span class="lkj-help">使用显示器下方实体键操作</span>';return;}
+  if(lkjPhase==='done'&&sim.state.lkjAttempted){screen.innerHTML=lkjView(`<p>本次输入存在 ${sim.state.lkjErrors.length} 项不一致</p><strong>考评已记录，允许继续后续作业</strong><span class="lkj-help">本项将在成绩单中按实际正确性计分；按【查询】可重新输入。</span>`,'参数核对记录');return;}
+  if(lkjPhase==='boot'){screen.innerHTML=lkjView('<p>设备自检正常</p><strong>按【查询】进入参数设定</strong><span class="lkj-help">使用显示器下方实体键操作</span>','LKJ2000');return;}
   if(lkjPhase==='edit'){
-    const [key,label,target]=lkjFields[lkjFieldIndex];const value=lkjDraft[key]||'';screen.innerHTML=`<b>参数输入 ${lkjFieldIndex+1}/${lkjFields.length}</b><span>${label}</span><strong class="lkj-input">${value||'_'}</strong>`;
-    screen.insertAdjacentHTML('beforeend',`<span class="lkj-help">训练值：${target}<br>数字键输入　【←】删除　【↑↓】换项　【→】确认${lkjNotice?`<br>${lkjNotice}`:''}</span>`);return;
+    const [key,label,target]=lkjFields[lkjFieldIndex];const value=lkjDraft[key]||'';screen.innerHTML=lkjView(`<p>${label}</p><strong class="lkj-input">${value||'_'}</strong><span class="lkj-help">训练值：${target}<br>数字键输入　【←】删除　【↑↓】换项　【→】确认${lkjNotice?`<br>${lkjNotice}`:''}</span>`,`参数输入 ${lkjFieldIndex+1}/${lkjFields.length}`);return;
   }
-  if(lkjPhase==='review'){screen.innerHTML=`<b>参数核对</b><div class="lkj-review">${lkjFields.map(([key,label])=>`<span>${label}</span><strong>${lkjDraft[key]||'—'}</strong>`).join('')}</div><span class="lkj-help">【←】返回修改　【→】进入揭示核对${lkjNotice?`<br>${lkjNotice}`:''}</span>`;return;}
+  if(lkjPhase==='review'){screen.innerHTML=lkjView(`<div class="lkj-review">${lkjFields.map(([key,label])=>`<span>${label}</span><strong>${lkjDraft[key]||'—'}</strong>`).join('')}</div><span class="lkj-help">【←】返回修改　【→】进入揭示核对${lkjNotice?`<br>${lkjNotice}`:''}</span>`,'参数核对');return;}
   const last=lkjNoticeIndex===RUNNING_NOTICES.length-1;
-  screen.innerHTML=`<b>运行揭示 ${lkjNoticeIndex+1}/${RUNNING_NOTICES.length}</b><span>${RUNNING_NOTICES[lkjNoticeIndex]}</span><strong>${last?'按【→】确认并投入监控':'按【→】查看下一条揭示'}</strong><span class="lkj-help">【←】返回参数${lkjNotice?`<br>${lkjNotice}`:''}</span>`;
+  screen.innerHTML=lkjView(`<table class="lkj-reveal-table"><thead><tr><th>序号</th><th>运行揭示内容</th></tr></thead><tbody>${RUNNING_NOTICES.map((notice,index)=>`<tr class="${index===lkjNoticeIndex?'selected':''}"><td>${index+1}</td><td>${notice}</td></tr>`).join('')}</tbody></table><strong>${last?'按【→】确认并投入监控':'按【→】查看下一条揭示'}</strong><span class="lkj-help">【←】返回参数${lkjNotice?`<br>${lkjNotice}`:''}</span>`,'全部揭示信息查询');
 }
-function openLkj(mode='normal'){if(!lkjRoot)buildLkj();closeSwitchPanel();closeSignalInspection();closeCredentialModal();lkjPhase=lkjOperational()?'done':'boot';lkjUnlockDraft={...(sim.state.lkjUnlockData||{})};lkjUnlockFieldIndex=0;lkjUnlockArmedUntil=0;lkjNoticeIndex=0;lkjNotice=mode==='special-unlock'?'请在监控主界面持续按压【↑】键2秒。':'';lkjDraft=sim.state.lkjData&&!sim.state.lkjData.debug?{...sim.state.lkjData}:{};lkjRoot.classList.add('open');lkjRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderLkj();}
+function openLkj(mode='normal'){if(!lkjRoot)buildLkj();closeSwitchPanel();closeSignalInspection();closeCredentialModal();closeCir();lkjPhase=lkjOperational()?'done':'boot';lkjUnlockDraft={...(sim.state.lkjUnlockData||{})};lkjUnlockFieldIndex=0;lkjUnlockArmedUntil=0;lkjNoticeIndex=0;lkjNotice=mode==='special-unlock'?'请在监控主界面持续按压【↑】键2秒。':'';lkjDraft=sim.state.lkjData&&!sim.state.lkjData.debug?{...sim.state.lkjData}:{};lkjRoot.classList.add('open');lkjRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderLkj();}
 function closeLkj(){if(!lkjRoot)return;clearTimeout(lkjUpHoldTimer);lkjUpHoldTimer=null;lkjRoot.classList.remove('open');lkjRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
 function buildSignalInspection(){
   const root=document.createElement('div');root.className='device-modal signal-modal';root.setAttribute('aria-hidden','true');
@@ -294,18 +305,109 @@ function renderSignalInspection(state){
   signalRoot.querySelector('[data-signal-meaning]').textContent=weatherUnreadable?`当前距出站信号机约 ${Math.ceil(ROUTE_CONTEXT.departureSignalDistance-state.distance)} m；应按机车信号低速运行，接近后再确认地面显示。`:recorded?`实际显示为${aspect.label}；考评流程继续，本项按实际正确性计分。`:state.signalObserved&&state.signalMeaningCorrect?aspect.meaning:weatherAwaiting?'不一致时必须立即停车。':'正常场景须先接收车站联控，再确认出站信号。';
   for(const b of signalRoot.querySelectorAll('[data-signal-answer]')){b.classList.toggle('selected',b.dataset.signalAnswer===state.signalAnswer&&state.signalObserved);b.disabled=weatherUnreadable;}
 }
-function openSignalInspection(){if(!signalRoot)buildSignalInspection();closeLkj();closeSwitchPanel();closeCredentialModal();signalRoot.classList.add('open');signalRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderSignalInspection(sim.state);}
+function openSignalInspection(){if(!signalRoot)buildSignalInspection();closeLkj();closeSwitchPanel();closeCredentialModal();closeCir();signalRoot.classList.add('open');signalRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderSignalInspection(sim.state);}
 function closeSignalInspection(){if(!signalRoot)return;signalRoot.classList.remove('open');signalRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
 function playStationAudio(kind){
   const audio=stationAudio[kind];if(!audio)return;
   try{audio.pause();audio.currentTime=0;audio.play().catch(()=>{});}catch{}
 }
+function confirmLocomotiveSignal(){
+  if(!sim.state.scenarioSelected){$('#hint').textContent='请先选择训练场景，再点击机车信号显示器确认显示。';return;}
+  command('locomotive-signal-answer',sim.state.scenarioId==='weather'?'green':sim.state.signalAspect);
+}
+function cirWindow(){const frame=cirRoot?.querySelector('.cir-frame');try{return frame?.contentWindow||null;}catch{return null;}}
+function cirLinked(){const w=cirWindow();try{return Boolean(w&&Array.isArray(w.mmiinfo)&&String(w.mmiinfo[1]||'').length===7);}catch{return false;}}
+function cirTask(state=sim.state){
+  if(!state.scenarioSelected)return {key:'select',title:'尚未选择训练场景',instruction:'请先在教学／考评窗口选择场景。'};
+  const scenario=getScenario(state.scenarioId);
+  if(['weather','routeTicket'].includes(scenario.id)&&!state.orderSigned)return {key:'order',title:'接收并签收调度命令',instruction:'调度命令通过CIR接收，核对命令号、区间和行车办法后签收。'};
+  if(scenario.id==='normal'&&!state.radioContacted)return {key:'normal-contact',title:'呼叫车站值班员',instruction:'在CIR主界面按“车站值班员”，再按“呼叫”；听取来话后选择规范复诵。',audio:'normal'};
+  if(scenario.id==='greenPermit'&&!state.radioContacted)return {key:'permit-contact',title:'绿色许可证联控',instruction:'在CIR主界面呼叫车站值班员，听取绿色许可证联控后规范复诵。',audio:'greenPermit'};
+  if(scenario.id==='normal'&&state.radioContacted&&!state.signalMeaningCorrect)return {key:'observe-ground',title:'观察地面出站信号',instruction:'关闭CIR，直接点击窗外本线出站信号机确认显示。'};
+  if(scenario.id==='normal'&&state.signalMeaningCorrect&&!state.directionObserved)return {key:'normal-direction',title:'复诵运行方向',instruction:'根据已接收的联控内容确认本次列车运行方向。'};
+  if(scenario.id==='weather'&&state.orderSigned&&!state.locomotiveSignalObserved)return {key:'observe-loco',title:'确认机车信号',instruction:'关闭CIR，直接点击驾驶室右上方机车信号显示器确认显示。'};
+  if(scenario.id==='weather'&&state.locomotiveSignalObserved&&!state.weatherReportSent)return {key:'weather-report',title:'报告并接收发车通知',instruction:'通过CIR报告地面出站信号无法辨认，听取车站发车通知后复诵。',audio:'departure'};
+  if(['greenPermit','routeTicket'].includes(scenario.id)&&!state.credentialAttempted)return {key:'credential',title:`等待核对${scenario.documentTitle}`,instruction:'关闭CIR，点击驾驶台上的纸质凭证位置，逐项核对送交凭证。'};
+  if(state.lkjUnlockRequired&&!state.lkjUnlockCorrect&&!(state.trainingMode==='assessment'&&state.lkjUnlockAttempted))return {key:'lkj-unlock',title:'等待LKJ非正常行车确认',instruction:'关闭CIR，点击LKJ；在监控主界面长按“↑”2秒，按凭证内容完成确认。'};
+  if(['greenPermit','routeTicket'].includes(scenario.id)&&!state.departureNoticeReceived)return {key:'departure',title:'接收发车通知',instruction:'在CIR中听取车站发车通知并完成规范复诵。',audio:'departure'};
+  return {key:'ready',title:'通信作业已完成',instruction:'关闭CIR，继续完成发车手信号、列尾风压和驾驶台发车操作。'};
+}
+function buildCir(){
+  const root=document.createElement('div');root.className='device-modal cir-modal';root.setAttribute('aria-hidden','true');
+  root.innerHTML=`<div class="device-shell cir-device" role="dialog" aria-modal="true" aria-label="CIR机车综合无线通信设备"><div class="device-head cir-head"><div><strong>CIR 机车综合无线通信设备</strong><span>车机联控、调度命令、发车通知及列尾风压查询</span></div><button type="button" class="device-close" aria-label="关闭CIR">×</button></div><div class="cir-layout"><div class="cir-frame-wrap"><div class="cir-loading">正在载入CIR模拟器…</div><iframe class="cir-frame" title="CIR模拟器" src="about:blank" sandbox="allow-scripts allow-same-origin allow-modals"></iframe></div><div class="cir-workflow" aria-live="polite"></div></div></div>`;
+  root.querySelector('.device-close').addEventListener('click',closeCir);root.addEventListener('click',(event)=>{if(event.target===root)closeCir();});
+  root.querySelector('.cir-frame').addEventListener('load',()=>{installCirBridge();fitCirFrame();renderCirWorkflow();});
+  document.body.append(root);cirRoot=root;
+}
+function fitCirFrame(){
+  const wrap=cirRoot?.querySelector('.cir-frame-wrap');if(!wrap)return;const rect=wrap.getBoundingClientRect();if(!rect.width||!rect.height)return;
+  const scale=Math.min(rect.width/CIR_RENDER_WIDTH,rect.height/CIR_RENDER_HEIGHT);cirRoot.style.setProperty('--cir-scale',String(Math.max(.14,scale)));
+}
+function installCirBridge(){
+  const w=cirWindow();if(!w)return;let doc=null;try{doc=w.document;}catch{return;}if(!doc?.getElementById('mmibody')||typeof w.buttonfix!=='function')return;
+  try{const media=w.HTMLMediaElement?.prototype;if(media&&!media.__credentialSafePlay){const originalPlay=media.play;media.play=function(){const pending=originalPlay.apply(this,arguments);pending?.catch?.(()=>{});return pending;};media.__credentialSafePlay=true;}}catch{}
+  if(!w.__credentialCirBridge){const original=w.buttonfix;w.buttonfix=function(code){const result=original.apply(this,arguments);try{onCirKey(String(code));}catch{}return result;};w.__credentialCirBridge=true;}
+  try{if(Array.isArray(w.mmiinfo)){w.mmiinfo[2]='H2026';w.mmiinfo[3]=String(Math.max(0,Math.round(sim.state.tailPipe))).padStart(4,'0');}}catch{}
+  cirBridgeReady=true;cirRoot.querySelector('.cir-loading')?.setAttribute('hidden','hidden');syncCirPressure(true);renderCirWorkflow();
+}
+function syncCirPressure(force=false){
+  if(!cirBridgeReady)return;const w=cirWindow();if(!w)return;const source=force||cirDelayedPressure==null?sim.state.tailPipe:cirDelayedPressure;const value=Math.max(0,Math.round(source));
+  try{if(Array.isArray(w.mmiinfo))w.mmiinfo[3]=String(value).padStart(4,'0').slice(-4);const shown=w.document?.getElementById('lwfyvalue');if(shown)shown.textContent=String(value);}catch{}
+}
+function updateCirPressure(dt){if(!cirBridgeReady)return;const target=sim.state.tailPipe;if(cirDelayedPressure==null)cirDelayedPressure=target;cirDelayedPressure+=(target-cirDelayedPressure)*Math.min(1,dt/2);syncCirPressure();}
+function syncCirLinkFromDevice(){
+  const w=cirWindow();try{const raw=String(w?.mmiinfo?.[1]||'');if(raw.length===7&&!sim.state.tailDeviceLinked)command('tail-link',raw.slice(1));else if(!raw&&sim.state.tailDeviceLinked)command('tail-unlink');}catch{}
+}
+function onCirKey(code){
+  syncCirLinkFromDevice();const w=cirWindow();
+  if(code==='bt4'){cirStationSelected=true;cirNotice='已选择车站值班员，请按右侧“呼叫”键。';}
+  else if(code==='rt1'&&cirStationSelected){playCirTaskAudio();}
+  else if(code==='rt9'){cirStationSelected=false;cirNotice='通话已结束。';}
+  else if(code==='bt10'){command('tail-unlink');cirNotice='列尾装置已销号。';}
+  else if(code==='bt12'&&Number(w?.mmistate)===1){
+    if(!cirLinked()){cirNotice='列尾尚未连接：按“主控”进入菜单，第6项输入6位列尾装置ID。';}
+    else{syncCirPressure(true);command('tail-query',sim.state.tailPipe);cirNotice=`列尾风压 ${Math.round(sim.state.tailPipe)} kPa，查询结果已记录。`;}
+  }
+  renderCirWorkflow();
+}
+function playCirTaskAudio(){
+  const task=cirTask();if(!task.audio){cirNotice=task.instruction;renderCirWorkflow();return;}
+  cirAudioTask=task.key;cirNotice='车站来话正在播放，请听清后完成规范复诵。';playStationAudio(task.audio);renderCirWorkflow();
+}
+function completeCirTask(action){
+  if(action==='play'){playCirTaskAudio();return;}
+  if(action==='order'){command('order-sign');}
+  else if(action==='contact-correct'){command('station-contact',true);}
+  else if(action==='contact-wrong'){command('station-contact',false);}
+  else if(action==='direction-correct'){command('direction-answer','qidouchong');}
+  else if(action==='direction-wrong'){command('direction-answer','other');}
+  else if(action==='weather-report'){command('weather-report');}
+  else if(action==='departure'){command('departure-notice');}
+  cirAudioTask='';cirNotice='';renderCirWorkflow();
+}
+function renderCirWorkflow(){
+  const box=cirRoot?.querySelector('.cir-workflow');if(!box)return;const state=sim.state;const task=cirTask(state);const scenario=getScenario(state.scenarioId);
+  let actions='';
+  if(task.key==='order')actions=`${credentialDocument(scenario,'order')}<button type="button" data-cir-action="order">核对无误，确认签收</button>`;
+  else if(['normal-contact','permit-contact'].includes(task.key))actions=`<button type="button" data-cir-action="play">接收／重放车站来话</button>${cirAudioTask===task.key?`<button type="button" data-cir-action="contact-correct">规范复诵：车次、股道、方向及凭证内容</button><button type="button" class="secondary" data-cir-action="contact-wrong">错误复诵</button>`:''}`;
+  else if(task.key==='normal-direction')actions='<button type="button" data-cir-action="direction-correct">复诵：2026次，七斗冲方向</button><button type="button" class="secondary" data-cir-action="direction-wrong">复诵其他方向</button>';
+  else if(task.key==='weather-report')actions=`<button type="button" data-cir-action="play">接收／重放发车通知</button>${cirAudioTask===task.key?'<button type="button" data-cir-action="weather-report">报告无法辨认地面信号并复诵发车通知</button>':''}`;
+  else if(task.key==='departure')actions=`<button type="button" data-cir-action="play">接收／重放发车通知</button>${cirAudioTask===task.key?'<button type="button" data-cir-action="departure">规范复诵发车通知</button>':''}`;
+  box.innerHTML=`<section><h3>${task.title}</h3><p>${task.instruction}</p>${cirNotice?`<p class="cir-notice">${cirNotice}</p>`:''}${actions}</section><section class="cir-tail-state"><h3>列尾装置</h3><dl><div><dt>连接</dt><dd>${state.tailDeviceLinked?state.tailDeviceId:'未连接'}</dd></div><div><dt>尾部风压</dt><dd>${state.tailPressureQueried?`${state.tailPressureValue} kPa`:'未查询'}</dd></div></dl><p>实际操作：主控 → 第6项输入6位列尾ID → 返回主界面 → 按“风压查询”。</p></section>`;
+  box.querySelectorAll('[data-cir-action]').forEach((button)=>button.addEventListener('click',()=>completeCirTask(button.dataset.cirAction)));
+}
+function openCir(){
+  if(!cirRoot)buildCir();closeLkj();closeSignalInspection();closeCredentialModal();closeSwitchPanel();
+  const frame=cirRoot.querySelector('.cir-frame');if(!frame.dataset.loaded){frame.dataset.loaded='1';frame.src=CIR_SRC;}
+  cirRoot.classList.add('open');cirRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderCirWorkflow();requestAnimationFrame(fitCirFrame);
+}
+function closeCir(){if(!cirRoot)return;cirRoot.classList.remove('open');cirRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
 function buildCredentialModal(){
   const root=document.createElement('div');root.className='device-modal credential-modal';root.setAttribute('aria-hidden','true');
-  root.innerHTML=`<div class="device-shell credential-shell" role="dialog" aria-modal="true" aria-label="行车凭证确认"><div class="device-head"><div><strong>确认行车凭证</strong><span>仅播放车站侧联控录音；学生通过文字操作完成应答与核对。</span></div><button type="button" class="device-close" aria-label="关闭">×</button></div><div class="credential-body"></div></div>`;
+  root.innerHTML=`<div class="device-shell credential-shell" role="dialog" aria-modal="true" aria-label="送交司机的纸质行车凭证"><div class="device-head"><div><strong>送交司机的纸质行车凭证</strong><span>从驾驶台凭证位置打开；联控、调度命令和发车通知在CIR办理。</span></div><button type="button" class="device-close" aria-label="关闭">×</button></div><div class="credential-body"></div></div>`;
   root.querySelector('.device-close').addEventListener('click',closeCredentialModal);root.addEventListener('click',(event)=>{if(event.target===root)closeCredentialModal();});document.body.append(root);credentialRoot=root;
 }
-function openCredentialModal(){if(!credentialRoot)buildCredentialModal();closeLkj();closeSignalInspection();credentialRoot.classList.add('open');credentialRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderCredentialModal(sim.state);}
+function openCredentialModal(){if(!credentialRoot)buildCredentialModal();closeLkj();closeSignalInspection();closeCir();credentialRoot.classList.add('open');credentialRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderCredentialModal(sim.state);}
 function closeCredentialModal(){if(!credentialRoot)return;credentialRoot.classList.remove('open');credentialRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
 function credentialAction(label,action,kind=''){return `<button type="button" class="credential-action" data-credential-action="${action}" data-audio-kind="${kind}">${label}</button>`;}
 function credentialDocument(scenario,type='credential'){
@@ -323,60 +425,42 @@ function credentialDocument(scenario,type='credential'){
 }
 function renderCredentialModal(state){
   if(!credentialRoot)return;const box=credentialRoot.querySelector('.credential-body');const scenario=getScenario(state.scenarioId);
-  if(!state.scenarioSelected){box.innerHTML='<p class="credential-empty">请先在右侧选择一个训练场景。</p>';return;}
-  let content=`<p class="credential-context"><b>${scenario.label}</b>：${scenario.description}</p>`;
-  if(scenario.id==='normal'){
-    if(!state.radioContacted) content+=`${credentialAction('播放车站联控录音并完成文字应答','normal-contact','normal')}<p class="credential-note">录音内容对应“2026次、七斗冲方向、株洲站1道出站信号好了”。</p>`;
-    else if(!state.signalMeaningCorrect) content+='<p class="credential-note ok">车站联控录音已播放。请关闭此页，点击窗外出站信号机确认绿灯；随后返回本页确认运行方向。</p>';
-    else if(!state.directionObserved||(state.trainingMode==='teaching'&&!state.directionCorrect)) content+=`<div class="credential-choice"><b>确认运行方向</b>${credentialAction('七斗冲方向','normal-direction-correct')}${credentialAction('其他方向','normal-direction-wrong')}</div>`;
-    else content+='<p class="credential-note ok">出站信号和运行方向已确认。请关闭本页，观察左上角发车手信号视频并点击确认。</p>';
-  } else if(scenario.id==='weather') {
-    if(!state.orderSigned) content+=`${credentialDocument(scenario)}${credentialAction('签收并确认调度命令','weather-order')}`;
-    else if(!state.locomotiveSignalObserved) content+=`<div class="credential-choice"><b>确认机车信号显示</b>${credentialAction('绿灯','weather-loco-green')}${credentialAction('黄灯','weather-loco-wrong')}</div>`;
-    else if(!state.weatherReportSent) content+=`${credentialAction('报告：地面出站信号无法辨认；接收发车通知','weather-report','departure')}<p class="credential-note">完成后按机车信号低速起动，接近地面出站信号机时必须再次确认。</p>`;
-    else content+=`<p class="credential-note ok">开车通知已收到。${state.handSignalConfirmed?(state.credentialStage==='confirm-ground-signal'?'请点击窗外地面出站信号机确认。':'按机车信号低速起动。'):'请关闭本页，观察左上角发车手信号视频并点击确认。'}</p>`;
-  } else {
-    if(scenario.id==='routeTicket'&&!state.orderSigned) content+=`${credentialDocument(scenario,'order')}${credentialAction('签收并确认调度命令','route-order')}`;
-    else if(scenario.id==='greenPermit'&&!state.radioContacted) content+=`${credentialAction('播放绿色许可证联控录音并完成文字应答','permit-contact','greenPermit')}`;
-    else if(!state.credentialPresented) content+=`${credentialAction(`显示并核对${scenario.documentTitle}`,'credential-open')}`;
-    else if(!state.credentialAttempted) content+=`${credentialDocument(scenario)}<div class="credential-choice"><b>核对结果</b>${credentialAction('信息一致，确认凭证','credential-correct')}${credentialAction('信息不一致','credential-wrong')}</div>`;
-    else if(state.lkjUnlockRequired&&!state.lkjUnlockCorrect&&!(state.trainingMode==='assessment'&&state.lkjUnlockAttempted)) {
-      const values=(scenario.lkjUnlockFields||[]).map(([,label,value])=>`${label} ${value}`).join('、');
-      const unlockInstruction=state.trainingMode==='teaching'?`在监控主界面长按【↑】2秒，选择“${scenario.lkjUnlockLabel}”，输入${values}，再按【解锁】＋【确认】。`:'在监控主界面长按【↑】2秒，按凭证内容选择方式、输入号码并完成【解锁】＋【确认】。';
-      content+=`${credentialDocument(scenario)}<p class="credential-note">当前凭证要求完成LKJ非正常行车确认：${unlockInstruction}</p>${credentialAction('打开LKJ完成非正常行车确认','open-lkj-unlock')}`;
-    }
-    else if(!state.departureNoticeReceived) content+=`${credentialDocument(scenario)}${credentialAction('播放发车通知并完成文字应答','departure-notice','departure')}`;
-    else content+=state.handSignalConfirmed?'<p class="credential-note ok">行车凭证、发车通知和发车手信号均已确认，可以按驾驶台流程发车。</p>':'<p class="credential-note ok">行车凭证和发车通知已确认。请关闭本页，观察左上角发车手信号视频并点击确认。</p>';
-  }
+  if(!['greenPermit','routeTicket'].includes(scenario.id)){box.innerHTML='<p class="credential-empty">当前场景没有需要送交司机核对的纸质行车凭证。请在驾驶台直接操作地面信号、机车信号或CIR。</p>';return;}
+  let content=`<p class="credential-context"><b>${scenario.label}</b>：送交司机的纸质凭证。请逐项核对车次、区间／方向、编号、印章及填发内容。</p>${credentialDocument(scenario)}`;
+  if(!state.credentialAttempted) content+=`<div class="credential-choice"><b>核对结果</b>${credentialAction('信息一致，确认凭证','credential-correct')}${credentialAction('信息不一致','credential-wrong')}</div>`;
+  else if(state.lkjUnlockRequired&&!state.lkjUnlockCorrect&&!(state.trainingMode==='assessment'&&state.lkjUnlockAttempted)) content+='<p class="credential-note">凭证已核对。关闭纸质凭证，点击驾驶台LKJ，在监控主界面长按【↑】2秒完成非正常行车确认。</p>';
+  else if(!state.departureNoticeReceived) content+='<p class="credential-note ok">凭证与LKJ操作已完成。关闭纸质凭证，点击驾驶台CIR接收发车通知并复诵。</p>';
+  else content+='<p class="credential-note ok">凭证、LKJ非正常行车确认及发车通知均已完成。</p>';
   box.innerHTML=content;
   box.querySelectorAll('[data-credential-action]').forEach((button)=>button.addEventListener('click',()=>{
-    const action=button.dataset.credentialAction;let accepted=false;
-    if(action==='normal-contact'){accepted=command('station-contact');}
-    else if(action==='normal-direction-correct'){accepted=command('direction-answer','qidouchong');}
-    else if(action==='normal-direction-wrong'){accepted=command('direction-answer','other');}
-    else if(action==='weather-order'){accepted=command('order-sign');}
-    else if(action==='weather-loco-green'){accepted=command('locomotive-signal-answer','green');}
-    else if(action==='weather-loco-wrong'){accepted=command('locomotive-signal-answer','yellow');}
-    else if(action==='weather-report'){accepted=command('weather-report');}
-    else if(action==='route-order'){accepted=command('order-sign');}
-    else if(action==='permit-contact'){accepted=command('station-contact');}
-    else if(action==='credential-open'){accepted=command('credential-open');}
-    else if(action==='credential-correct'){accepted=command('credential-submit',true);}
-    else if(action==='credential-wrong'){accepted=command('credential-submit',false);}
-    else if(action==='open-lkj-unlock'){openLkj('special-unlock');return;}
-    else if(action==='departure-notice'){accepted=command('departure-notice');}
-    if(accepted&&button.dataset.audioKind)playStationAudio(button.dataset.audioKind);
+    const action=button.dataset.credentialAction;
+    if(action==='credential-correct'){command('credential-submit',true);}
+    else if(action==='credential-wrong'){command('credential-submit',false);}
     renderCredentialModal(sim.state);
   }));
 }
+function deliveredCredentialAvailable(state){
+  const scenario=getScenario(state.scenarioId);
+  if(scenario.id==='greenPermit')return state.radioContacted;
+  if(scenario.id==='routeTicket')return state.orderSigned;
+  return false;
+}
+function openDeliveredCredential(){
+  const scenario=getScenario(sim.state.scenarioId);
+  if(!deliveredCredentialAvailable(sim.state)){
+    $('#hint').textContent=`当前尚未送交${scenario.documentTitle||'纸质行车凭证'}；请先在CIR完成联控或调度命令签收。`;
+    return;
+  }
+  if(!sim.state.credentialPresented&&!command('credential-open'))return;
+  openCredentialModal();
+}
 function buildTrainingControls(){
   const root=$('#training-controls');if(!root)return;
-  root.innerHTML=`<div class="training-row mode-row"><button type="button" data-mode="teaching">教学模式</button><button type="button" data-mode="assessment">考评模式</button></div><div class="training-row scenario-row">${Object.values(SCENARIOS).map((scenario)=>`<button type="button" data-scenario="${scenario.id}">${scenario.shortLabel}</button>`).join('')}</div><button type="button" class="credential-entry" data-credential-entry>进入凭证确认台</button><p class="initial-check-state" data-initial-state>请在驾驶台逐项核对初始位置。</p><div class="initial-check-grid" data-initial-grid>${INITIAL_CHECKS.map(([key,label,target])=>`<button type="button" class="initial-check-card pending" data-initial-card="${key}"><b>${label}</b><span>${target} · 未核对</span></button>`).join('')}</div><div class="training-row"><button type="button" data-training="initial">提交初始位置核对</button></div><p class="training-state" data-training-state></p>`;
+  root.innerHTML=`<div class="training-row mode-row"><button type="button" data-mode="teaching">教学模式</button><button type="button" data-mode="assessment">考评模式</button></div><div class="training-row scenario-row">${Object.values(SCENARIOS).map((scenario)=>`<button type="button" data-scenario="${scenario.id}">${scenario.shortLabel}</button>`).join('')}</div><p class="equipment-local-note">本窗口只选择模式和场景。信号、机车信号、LKJ、CIR及纸质凭证均须在驾驶台对应设备上直接操作。</p><p class="initial-check-state" data-initial-state>请在驾驶台逐项核对初始位置。</p><div class="initial-check-grid" data-initial-grid>${INITIAL_CHECKS.map(([key,label,target])=>`<button type="button" class="initial-check-card pending" data-initial-card="${key}"><b>${label}</b><span>${target} · 未核对</span></button>`).join('')}</div><div class="training-row"><button type="button" data-training="initial">提交初始位置核对</button></div><p class="training-state" data-training-state></p>`;
   root.querySelector('[data-training="initial"]').addEventListener('click',()=>command('initial-confirm'));
   root.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>command('training-mode',b.dataset.mode)));
   root.querySelectorAll('[data-scenario]').forEach(b=>b.addEventListener('click',()=>command('scenario-select',b.dataset.scenario)));
   root.querySelectorAll('[data-initial-card]').forEach((card)=>card.addEventListener('click',()=>focusInitialCheck(card.dataset.initialCard)));
-  root.querySelector('[data-credential-entry]').addEventListener('click',openCredentialModal);
   syncTrainingControls(sim.state);
 }
 function focusInitialCheck(key){
@@ -393,7 +477,6 @@ function syncTrainingControls(state){
   for(const [key,label,target] of INITIAL_CHECKS){const card=root.querySelector(`[data-initial-card="${key}"]`);if(!card)continue;const checkedNow=Boolean(state.initialChecks?.[key]);const correct=sim.initialCheckIsCorrect(key);card.classList.remove('pending','current','done','warning');if(checkedNow&&correct){card.classList.add('done');card.querySelector('span').textContent=`${target} · 已核对`;}else if(state.trainingMode==='teaching'&&!correct){card.classList.add('warning');card.querySelector('span').textContent=`${target} · 请调整`;}else if(checked===INITIAL_CHECKS.length&&state.trainingMode==='teaching'){card.classList.add('current');card.querySelector('span').textContent=`${target} · 待复核`;}else{card.classList.add('pending');card.querySelector('span').textContent=state.trainingMode==='assessment'&&checkedNow?`${target} · 已操作`:`${target} · 未核对`;}}
   root.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===state.trainingMode));
   root.querySelectorAll('[data-scenario]').forEach(b=>b.classList.toggle('active',b.dataset.scenario===state.scenarioId&&state.scenarioSelected));
-  root.querySelector('[data-credential-entry]').disabled=!state.scenarioSelected;
   const scenario=getScenario(state.scenarioId);root.querySelector('[data-training-state]').textContent=`当前：${state.trainingMode==='teaching'?'教学':'考评'}模式 · ${state.scenarioSelected?scenario.label:'未选择场景'}${state.authority?' · 行车凭证已确认':''}`;
 }
 function buildResultReport(){
@@ -406,7 +489,7 @@ function showResultReport(state){
   resultRoot.querySelector('[data-result-score]').textContent=score.score;resultRoot.querySelector('[data-result-summary]').textContent=`完成 ${score.completed}/${PROCEDURE.length} 个作业项点${score.deductions?`，操作扣分 ${score.deductions} 分`:'，无操作扣分'}。`;
   resultRoot.querySelector('[data-result-items]').innerHTML=score.itemScores.map((item)=>`<li class="${item.correct?'pass':'fail'}"><span>${item.label}${item.locked?'（动车时未完成，已锁定失分）':item.earned>0&&!item.correct?'（部分完成）':item.complete&&!item.correct?'（操作或核对错误）':''}</span><b>${item.earned}/${item.weight}</b></li>`).join('');resultRoot.classList.add('open');resultRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');resultShown=true;
 }
-function closeDevicePanels(){closeSwitchPanel();closePowerCabinet();closeLkj();closeSignalInspection();closeCredentialModal();if(hornPointerId!==null)stopHorn();else{hornAudio.pause();hornAudio.currentTime=0;if(sim.state.hornActive)command('horn-stop');}}
+function closeDevicePanels(){closeSwitchPanel();closePowerCabinet();closeLkj();closeSignalInspection();closeCredentialModal();closeCir();if(hornPointerId!==null)stopHorn();else{hornAudio.pause();hornAudio.currentTime=0;if(sim.state.hornActive)command('horn-stop');}}
 function buildSwitchPanel(){
   const root=document.createElement('div');root.id='switch-panel-modal';root.className='switch-panel-modal';root.setAttribute('aria-hidden','true');
   root.innerHTML=`<div class="switch-panel-shell" role="dialog" aria-modal="true" aria-label="HXD1C板钮面板"><div class="switch-panel-head"><div><strong>板钮面板</strong><span>点击上半区或下半区拨动，板钮保持在所选位置</span></div><button type="button" class="switch-panel-close" aria-label="关闭板钮面板">×</button></div><div class="switch-panel-photo"><img src="./assets/switch-panel/HXD1C-switch-panel-reference.jpg" alt="HXD1C板钮面板实物参考" /><div class="switch-panel-controls"></div></div><div class="switch-panel-status">主断：上合/下分；受电弓：上升/下降；空压机：上投入/下停止。</div></div>`;
@@ -483,12 +566,13 @@ function render(state,message='') {
     const autoNames=['运转位','初制动位','常用制动Ⅱ','常用制动Ⅲ','常用制动Ⅳ','紧急位'];const independentNames=['缓解位','制动Ⅰ','制动Ⅱ','制动Ⅲ','制动Ⅳ','全制动位'];
     elements.autoPosition.querySelector('span').textContent=autoNames[state.autoBrake];elements.independentPosition.querySelector('span').textContent=independentNames[state.independentBrake];elements.directionPosition.querySelector('span').textContent=state.direction==='F'?'前进位':state.direction==='R'?'后退位':'中立位';elements.tractionPosition.querySelector('span').textContent=state.traction>0?`牵引 ${state.traction} 级`:state.traction<0?`电制动 ${Math.abs(state.traction)} 级`:'零位';
     frame(elements.pantoDisplay,state.panto?1:0,1,2); frame(elements.signal,SIGNAL_ASPECTS[state.signalAspect].frame,4,2);
+    const paperAvailable=deliveredCredentialAvailable(state);elements.credentialPaper.hidden=!paperAvailable;elements.credentialPaper.classList.toggle('available',paperAvailable);
   }
   for(const [id] of keys) document.querySelector(`#keys [data-id="${id}"]`)?.classList.toggle('active',activeState(id,state));
   syncSwitchPanel(state);
   if(message&&switchPanelRoot?.classList.contains('open'))setSwitchPanelMessage(message);
   syncPowerCabinet(state);
-  renderSignalInspection(state);renderCredentialModal(state);syncTrainingControls(state);
+  renderSignalInspection(state);renderCredentialModal(state);renderCirWorkflow();syncTrainingControls(state);
   const assessmentFinished=state.trainingMode==='assessment'&&state.completed;if(!assessmentFinished)resultShown=false;
   const p=procedureState(state); $('#procedure').innerHTML=PROCEDURE.map(([n],i)=>`<li class="${p.complete[i]?'done':i===p.current?'active':''}">${n}</li>`).join(''); const score=scoreRun(state); const aspect=SIGNAL_ASPECTS[state.signalAspect];const scenario=getScenario(state.scenarioId); $('#status').innerHTML=`<strong>状态：</strong>${state.completed?'训练完成':'第 '+(p.current+1)+' 步'}<br>场景 ${state.scenarioSelected?scenario.label:'未选择场景'} · 凭证 ${state.scenarioSelected?scenario.credential:'—'}<br>总风 ${state.mainRes.toFixed(0)} kPa · 制动缸 ${state.brakeCyl.toFixed(0)} kPa<br>地面信号 ${aspect.label}${state.authority?' · 行车凭证已确认':''}<br>LKJ ${state.lkjStartCorrect?'已开车对标':state.lkjStartAttempted?'开车对标待复核':'开车对标待执行'}<br>速度 ${state.speed.toFixed(1)} km/h · ${state.lowNotchStartConfirmed?'低级位起动已确认':'低级位起动中'} · 当前得分 ${score.score}${score.deductions?` · 扣分 ${score.deductions}`:''}`; const workflowProgress=$('[data-workflow-progress]');if(workflowProgress)workflowProgress.textContent=`${p.complete.filter(Boolean).length}/${PROCEDURE.length}`; if(message)$('#hint').textContent=message;if(p.done||assessmentFinished)showResultReport(state);
 }
@@ -533,7 +617,7 @@ $('#enter-training').addEventListener('click',enterImmersive);
 $('#exit-immersive').addEventListener('click',exitImmersive);
 addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement&&document.documentElement.classList.contains('immersive')&&!mobileLike)document.documentElement.classList.remove('immersive');routeScene.resize();});
 addEventListener('orientationchange',()=>{closeDevicePanels();setTimeout(()=>routeScene.resize(),160);});
-window.visualViewport?.addEventListener('resize',()=>routeScene.resize());
+window.visualViewport?.addEventListener('resize',()=>{routeScene.resize();if(cirRoot?.classList.contains('open'))fitCirFrame();});
 addEventListener('pointerup',stopHorn,true);addEventListener('pointercancel',stopHorn,true);addEventListener('blur',()=>stopHorn());addEventListener('pagehide',()=>stopHorn());document.addEventListener('visibilitychange',()=>{if(document.hidden)stopHorn();});
 $('#stage').addEventListener('click',(event)=>{if(selectedView!=='front'||document.body.classList.contains('device-panel-active')||document.body.classList.contains('switch-panel-active'))return;if(routeScene.hitTestDepartureSignal(event.clientX,event.clientY))openSignalInspection();});
-document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildLkj();buildTrainingControls();buildKeys();bindDrag();bindControlDrawers();setView('front');sim.onChange(render);let last=performance.now();function loop(now){sim.tick(Math.min(.05,(now-last)/1000));routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);
+document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildLkj();buildTrainingControls();buildKeys();bindDrag();bindControlDrawers();setView('front');sim.onChange(render);let last=performance.now();function loop(now){const dt=Math.min(.05,(now-last)/1000);sim.tick(dt);updateCirPressure(dt);routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);

@@ -6,7 +6,7 @@ export const PROCEDURE = [
   ['简略制动机试验：减压并确认制动', s => s.brakeTested, 7],
   ['大闸回运转位并确认缓解', s => s.releaseObserved, 5],
   ['缓解停放制动', s => !s.parkingBrake, 5],
-  ['确认本场景行车凭证、按需完成LKJ解锁、开车通知及发车手信号', s => s.credentialConfirmed && (!s.lkjUnlockRequired || s.lkjUnlockCorrect || (s.trainingMode === 'assessment' && s.lkjUnlockAttempted)) && (!s.handSignalRequired || s.handSignalConfirmed) && (s.credentialCorrect || s.trainingMode === 'assessment'), 20, s => s.credentialCorrect && (!s.lkjUnlockRequired || s.lkjUnlockCorrect) && (!s.handSignalRequired || s.handSignalConfirmed)],
+  ['通过CIR查询列尾风压，确认行车凭证、开车通知及发车手信号', s => (s.tailPressureQueried || s.trainingMode === 'assessment') && s.credentialConfirmed && (!s.lkjUnlockRequired || s.lkjUnlockCorrect || (s.trainingMode === 'assessment' && s.lkjUnlockAttempted)) && (!s.handSignalRequired || s.handSignalConfirmed) && (s.credentialCorrect || s.trainingMode === 'assessment'), 20, s => s.tailPressureQueried && s.credentialCorrect && (!s.lkjUnlockRequired || s.lkjUnlockCorrect) && (!s.handSignalRequired || s.handSignalConfirmed)],
   ['开启前照灯并鸣笛', s => s.headlight && s.horn, 5],
   ['方向手柄置前进', s => s.direction === 'F', 3],
   // 低级位平稳起动的完成标志是列车已经平稳滚动，不能错误地要求低级位一直维持到 5 km/h。
@@ -24,13 +24,15 @@ export function procedureState(state) {
 function credentialStepEarned(state) {
   const locked = new Set(state.assessmentCredentialLocks || []);
   if (!state.lkjUnlockRequired) {
-    return (state.credentialCorrect && !locked.has('credential') ? 14 : 0)
-      + ((!state.handSignalRequired || state.handSignalConfirmed) && !locked.has('handSignal') ? 6 : 0);
+    return (state.credentialCorrect && !locked.has('credential') ? 12 : 0)
+      + (state.tailPressureQueried && !locked.has('tail') ? 3 : 0)
+      + ((!state.handSignalRequired || state.handSignalConfirmed) && !locked.has('handSignal') ? 5 : 0);
   }
   let earned = 0;
-  if (state.credentialCorrect && !locked.has('credential')) earned += 6;
-  if (state.departureNoticeReceived && !locked.has('notice')) earned += 3;
+  if (state.credentialCorrect && !locked.has('credential')) earned += 5;
+  if (state.departureNoticeReceived && !locked.has('notice')) earned += 2;
   if ((!state.handSignalRequired || state.handSignalConfirmed) && !locked.has('handSignal')) earned += 3;
+  if (state.tailPressureQueried && !locked.has('tail')) earned += 2;
   if (state.lkjUnlockMethodCorrect && !state.lkjUnlockMethodErrorRecorded && !locked.has('method')) earned += 2;
   if (state.lkjUnlockFieldsCorrect && !state.lkjUnlockFieldsErrorRecorded && !locked.has('fields')) earned += 3;
   if (state.lkjUnlockCombinationCorrect && !state.lkjUnlockCombinationErrorRecorded && !locked.has('combination')) earned += 3;

@@ -20,6 +20,8 @@ export const SCENARIOS = {
     description: '地面出站信号无法辨认，先按机车信号和开车通知起动，再确认地面信号。',
     audio: 'station-departure-notice.mp3',
     documentTitle: '调度命令（教学情境）',
+    orderNumber: '2026002',
+    orderText: '自接令时起，株洲站至七斗冲站间按天气恶劣难以辨认信号办法行车。列车按机车信号显示运行；接近地面信号机时须确认地面信号。',
     documentText: '自接令时起，株洲站至七斗冲站间改按天气恶劣难以辨认信号办法行车。列车按机车信号显示运行；接近地面信号机时须确认地面信号。',
     documentFields: [],
     requiresLkjUnlock: false,

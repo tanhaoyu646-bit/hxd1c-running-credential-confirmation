@@ -7,6 +7,7 @@ const viewportWidth = Number(process.env.VIEWPORT_WIDTH || 1600);
 const viewportHeight = Number(process.env.VIEWPORT_HEIGHT || 1200);
 const mobile = process.env.MOBILE === '1';
 const drawer = process.env.DRAWER || 'training';
+const captureDevice = process.env.CAPTURE_DEVICE || '';
 
 const pages = await fetch(`http://127.0.0.1:${port}/json`).then((response) => response.json());
 const page = pages.find((entry) => entry.type === 'page');
@@ -31,7 +32,7 @@ socket.addEventListener('message', (event) => {
     else resolve(message.result);
     return;
   }
-  if (message.method === 'Runtime.exceptionThrown') consoleErrors.push(message.params.exceptionDetails.text);
+  if (message.method === 'Runtime.exceptionThrown') consoleErrors.push(message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text);
   if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') {
     consoleErrors.push(message.params.args.map((arg) => arg.value || arg.description || '').join(' '));
   }
@@ -89,33 +90,56 @@ for (const scenario of ['normal', 'weather', 'greenPermit', 'routeTicket']) {
 await evaluate(`document.querySelector('[data-scenario="normal"]').click(); true`);
 const interactionChecks = await evaluate(`(() => {
   document.querySelector('[data-scenario="routeTicket"]').click();
-  document.querySelector('[data-credential-entry]').click();
-  const dispatchOrderForm = Boolean(document.querySelector('.credential-document.dispatch-order'));
-  document.querySelector('[data-credential-action="route-order"]').click();
-  document.querySelector('[data-credential-action="credential-open"]').click();
+  document.querySelector('.cir-hotspot').click();
+  const dispatchOrderForm = Boolean(document.querySelector('.cir-workflow .credential-document.dispatch-order'));
+  document.querySelector('[data-cir-action="order"]').click();
+  document.querySelector('.cir-modal .device-close').click();
+  document.querySelector('.credential-paper-hotspot').click();
   const routeTicketForm = Boolean(document.querySelector('.credential-document.route-ticket'));
   document.querySelector('.credential-modal .device-close').click();
   document.querySelector('[data-scenario="greenPermit"]').click();
-  document.querySelector('[data-credential-entry]').click();
-  document.querySelector('[data-credential-action="permit-contact"]').click();
-  document.querySelector('[data-credential-action="credential-open"]').click();
+  document.querySelector('.cir-hotspot').click();
+  document.querySelector('[data-cir-action="play"]').click();
+  document.querySelector('[data-cir-action="contact-correct"]').click();
+  document.querySelector('.cir-modal .device-close').click();
+  document.querySelector('.credential-paper-hotspot').click();
   const greenPermitForm = Boolean(document.querySelector('.credential-document.green-permit'));
   document.querySelector('.credential-modal .device-close').click();
   document.querySelector('[data-scenario="normal"]').click();
   document.querySelector('#keys [data-id="lkj"]').click();
   document.querySelector('.lkj-trigger').click();
-  const firstOpen = document.querySelector('.lkj-screen').innerText.includes('监控状态');
+  const firstOpen = document.querySelector('.lkj-screen').innerText.includes('监控主界面');
   document.querySelector('[data-lkj-key="query"]').click();
   const queryReview = document.querySelector('.lkj-screen').innerText.includes('参数核对');
   document.querySelector('.lkj-modal .device-close').click();
   document.querySelector('.lkj-trigger').click();
-  const reopenMonitor = document.querySelector('.lkj-screen').innerText.includes('监控状态');
+  const reopenMonitor = document.querySelector('.lkj-screen').innerText.includes('监控主界面');
   document.querySelector('.lkj-modal .device-close').click();
   document.querySelector('.signal-trigger').click();
   const signalClickOpens = document.querySelector('.signal-modal').classList.contains('open');
   document.querySelector('.signal-modal .device-close').click();
-  return { dispatchOrderForm, routeTicketForm, greenPermitForm, firstOpen, queryReview, reopenMonitor, signalClickOpens };
+  const cirDeviceAvailable = Boolean(document.querySelector('.cir-frame'));
+  const locomotiveSignalClickable = Boolean(document.querySelector('.locomotive-signal-hotspot'));
+  return { dispatchOrderForm, routeTicketForm, greenPermitForm, firstOpen, queryReview, reopenMonitor, signalClickOpens, cirDeviceAvailable, locomotiveSignalClickable };
 })()`);
+const cirTailQuery = await evaluate(`new Promise((resolve) => {
+  document.querySelector('[data-scenario="normal"]').click();
+  document.querySelector('.cir-hotspot').click();
+  setTimeout(() => {
+    const frame = document.querySelector('.cir-frame');
+    const win = frame && frame.contentWindow;
+    if (!win || !Array.isArray(win.mmiinfo) || typeof win.buttonfix !== 'function') { resolve(false); return; }
+    win.mmiinfo[1] = '9123456';
+    win.mmistate = 1;
+    win.buttonfix('bt12');
+    setTimeout(() => {
+      const text = document.querySelector('.cir-tail-state')?.innerText || '';
+      document.querySelector('.cir-modal .device-close')?.click();
+      resolve(text.includes('123456') && text.includes('kPa'));
+    }, 180);
+  }, 350);
+})`, true);
+interactionChecks.cirTailQuery = cirTailQuery;
 const longPressMenu = await evaluate(`new Promise((resolve) => {
   document.querySelector('[data-mode="assessment"]').click();
   document.querySelector('[data-scenario="greenPermit"]').click();
@@ -138,6 +162,13 @@ if (mobile) {
   await new Promise((resolve) => setTimeout(resolve, 300));
   await evaluate(`document.querySelector('#${drawer === 'workflow' ? 'workflow' : 'training'}-toggle').click(); true`);
   await new Promise((resolve) => setTimeout(resolve, 300));
+}
+if (captureDevice === 'cir') {
+  await evaluate(`document.querySelector('.cir-hotspot').click(); true`);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+} else if (captureDevice === 'lkj') {
+  await evaluate(`document.querySelector('#keys [data-id="lkj"]').click(); document.querySelector('.lkj-trigger').click(); true`);
+  await new Promise((resolve) => setTimeout(resolve, 250));
 }
 
 const summary = await evaluate(`(() => {
