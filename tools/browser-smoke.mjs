@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 
 const port = Number(process.env.CDP_PORT || 9224);
-const baseUrl = process.env.TRAINING_URL || 'http://127.0.0.1:4174/';
+const baseUrl = process.env.TRAINING_URL || 'http://127.0.0.1:4174/?debug=1';
 const screenshotPath = process.env.SCREENSHOT_PATH || `${process.env.TEMP || '.'}/credential-browser-smoke.png`;
 const viewportWidth = Number(process.env.VIEWPORT_WIDTH || 1600);
 const viewportHeight = Number(process.env.VIEWPORT_HEIGHT || 1200);
@@ -77,16 +77,62 @@ for (const scenario of ['normal', 'weather', 'greenPermit', 'routeTicket']) {
     const signal = document.querySelector('.signal-trigger');
     return {
       visible: signal.classList.contains('visible'),
-      fogged: signal.classList.contains('fogged'),
-      red: signal.classList.contains('aspect-red'),
       label: signal.textContent,
       left: signal.style.left,
       top: signal.style.top,
+      width: getComputedStyle(signal).width,
+      background: getComputedStyle(signal).backgroundColor,
     };
   })()`);
   await new Promise((resolve) => setTimeout(resolve, 80));
 }
 await evaluate(`document.querySelector('[data-scenario="normal"]').click(); true`);
+const interactionChecks = await evaluate(`(() => {
+  document.querySelector('[data-scenario="routeTicket"]').click();
+  document.querySelector('[data-credential-entry]').click();
+  const dispatchOrderForm = Boolean(document.querySelector('.credential-document.dispatch-order'));
+  document.querySelector('[data-credential-action="route-order"]').click();
+  document.querySelector('[data-credential-action="credential-open"]').click();
+  const routeTicketForm = Boolean(document.querySelector('.credential-document.route-ticket'));
+  document.querySelector('.credential-modal .device-close').click();
+  document.querySelector('[data-scenario="greenPermit"]').click();
+  document.querySelector('[data-credential-entry]').click();
+  document.querySelector('[data-credential-action="permit-contact"]').click();
+  document.querySelector('[data-credential-action="credential-open"]').click();
+  const greenPermitForm = Boolean(document.querySelector('.credential-document.green-permit'));
+  document.querySelector('.credential-modal .device-close').click();
+  document.querySelector('[data-scenario="normal"]').click();
+  document.querySelector('#keys [data-id="lkj"]').click();
+  document.querySelector('.lkj-trigger').click();
+  const firstOpen = document.querySelector('.lkj-screen').innerText.includes('监控状态');
+  document.querySelector('[data-lkj-key="query"]').click();
+  const queryReview = document.querySelector('.lkj-screen').innerText.includes('参数核对');
+  document.querySelector('.lkj-modal .device-close').click();
+  document.querySelector('.lkj-trigger').click();
+  const reopenMonitor = document.querySelector('.lkj-screen').innerText.includes('监控状态');
+  document.querySelector('.lkj-modal .device-close').click();
+  document.querySelector('.signal-trigger').click();
+  const signalClickOpens = document.querySelector('.signal-modal').classList.contains('open');
+  document.querySelector('.signal-modal .device-close').click();
+  return { dispatchOrderForm, routeTicketForm, greenPermitForm, firstOpen, queryReview, reopenMonitor, signalClickOpens };
+})()`);
+const longPressMenu = await evaluate(`new Promise((resolve) => {
+  document.querySelector('[data-mode="assessment"]').click();
+  document.querySelector('[data-scenario="greenPermit"]').click();
+  document.querySelector('#keys [data-id="lkj"]').click();
+  document.querySelector('.lkj-trigger').click();
+  const up = document.querySelector('[data-lkj-key="up"]');
+  up.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1 }));
+  setTimeout(() => {
+    const opened = document.querySelector('.lkj-screen').innerText.includes('非正常行车确认');
+    up.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 }));
+    document.querySelector('.lkj-modal .device-close').click();
+    document.querySelector('[data-mode="teaching"]').click();
+    document.querySelector('[data-scenario="normal"]').click();
+    resolve(opened);
+  }, 2150);
+})`, true);
+interactionChecks.longPressMenu = longPressMenu;
 if (mobile) {
   await evaluate(`document.querySelector('#enter-training').click(); true`);
   await new Promise((resolve) => setTimeout(resolve, 300));
@@ -119,10 +165,13 @@ const summary = await evaluate(`(() => {
   };
 })()`);
 summary.signalStates = signalStates;
+summary.interactionChecks = interactionChecks;
 
 const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
 await writeFile(screenshotPath, Buffer.from(shot.data, 'base64'));
 socket.close();
 
 console.log(JSON.stringify({ summary, consoleErrors, networkErrors, screenshotPath }, null, 2));
-if (consoleErrors.length || networkErrors.length) process.exitCode = 1;
+const signalInvalid = Object.values(signalStates).some((state) => !state.visible || state.label.trim() || !state.left || !state.top || state.background !== 'rgba(0, 0, 0, 0)');
+const interactionInvalid = Object.values(interactionChecks).some((value) => value !== true);
+if (consoleErrors.length || networkErrors.length || signalInvalid || interactionInvalid || summary.overflowX) process.exitCode = 1;

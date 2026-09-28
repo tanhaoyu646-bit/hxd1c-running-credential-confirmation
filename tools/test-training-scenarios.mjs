@@ -40,7 +40,10 @@ function authorize(sim, id) {
     assert.equal(sim.command('credential-open'), true);
     assert.equal(sim.command('credential-submit', true), true);
     const scenario = getScenario(id);
-    assert.equal(sim.command('lkj-special-unlock', scenario.lkjUnlockCode), true);
+    assert.equal(sim.command('lkj-special-method', scenario.lkjUnlockMethod), true);
+    assert.equal(sim.command('lkj-special-input', Object.fromEntries(scenario.lkjUnlockFields.map(([key, , value]) => [key, value]))), true);
+    assert.equal(sim.command('lkj-special-unlock', true), true);
+    assert.equal(sim.state.lkjUnlockLimit, id === 'greenPermit' ? 60 : 45);
     assert.equal(sim.command('departure-notice'), true);
   }
   assert.equal(sim.command('hand-signal-confirm'), true);
@@ -82,12 +85,23 @@ function runScenario(id) {
 
 for (const id of ['normal', 'weather', 'greenPermit', 'routeTicket']) runScenario(id);
 
+for (const [id, limit] of [['greenPermit', 60], ['routeTicket', 45]]) {
+  const limited = prepare(id);
+  authorize(limited, id);
+  limited.state.speed = 100;
+  limited.tick(0.05);
+  assert(limited.state.speed <= limit, `${id}解锁后的LKJ限速应为${limit}km/h`);
+}
+
 for (const id of ['greenPermit', 'routeTicket']) {
   const blocked = prepare(id);
   if (id === 'greenPermit') assert.equal(blocked.command('station-contact'), true);
   else assert.equal(blocked.command('order-sign'), true);
   assert.equal(blocked.command('credential-open'), true);
   assert.equal(blocked.command('credential-submit', true), true);
+  const scenario = getScenario(id);
+  assert.equal(blocked.command('lkj-special-method', scenario.lkjUnlockMethod), true);
+  assert.equal(blocked.command('lkj-special-input', Object.fromEntries(scenario.lkjUnlockFields.map(([key, , value]) => [key, value]))), true);
   assert.equal(blocked.command('departure-notice'), false, `${id}未解锁时错误放行`);
   assert.equal(blocked.state.departureNoticeReceived, false, `${id}未解锁时错误记录发车通知`);
   assert.equal(blocked.state.authority, false, `${id}未解锁时错误取得行车授权`);
@@ -97,11 +111,32 @@ const assessedWrong = prepare('greenPermit', 'assessment');
 assert.equal(assessedWrong.command('station-contact'), true);
 assert.equal(assessedWrong.command('credential-open'), true);
 assert.equal(assessedWrong.command('credential-submit', false), true);
-assert.equal(assessedWrong.command('lkj-special-unlock', '000000'), true);
+assert.equal(assessedWrong.command('lkj-special-method', 'routeTicket'), true);
+assert.equal(assessedWrong.command('lkj-special-input', { permitNumber: '000000' }), true);
+assert.equal(assessedWrong.command('lkj-special-unlock', false), true);
 assert.equal(assessedWrong.command('departure-notice'), true);
 assert.equal(assessedWrong.command('hand-signal-confirm'), true);
 assert.equal(procedureState(assessedWrong.state).complete[7], true, '考评模式错误操作应记录后继续流程');
-assert.equal(scoreRun(assessedWrong.state).itemScores[7].earned, 0, '错误凭证或错误解锁不应获得第8项分数');
+assert.equal(scoreRun(assessedWrong.state).itemScores[7].earned, 6, '第8项应仅保留发车通知和手信号的分值');
+
+const assessmentSoftGate = new TrainSimulation();
+assert.equal(assessmentSoftGate.command('training-mode', 'assessment'), true);
+assert.equal(assessmentSoftGate.command('scenario-select', 'normal'), true);
+assert.equal(assessmentSoftGate.command('panto', true), true);
+for (let index = 0; index < 300; index += 1) assessmentSoftGate.tick(0.05);
+assert.equal(assessmentSoftGate.command('main-breaker', true), true);
+assert.equal(assessmentSoftGate.command('parking-release'), true);
+assert.equal(assessmentSoftGate.command('direction', 'F'), true);
+assert.equal(assessmentSoftGate.command('traction', 1), true, '考评模式满足物理条件后不应被流程门禁阻断');
+for (let index = 0; index < 1000; index += 1) assessmentSoftGate.tick(0.05);
+assert(assessmentSoftGate.state.distance > 0, '考评模式列车应实际移动');
+assert(assessmentSoftGate.state.assessmentScoreLocks.includes(1), '动车时未完成的评分项应锁定失分');
+assert(assessmentSoftGate.state.assessmentCredentialLocks.includes('credential'), '动车时未确认凭证应锁定对应子项失分');
+assessmentSoftGate.command('headlight');
+assessmentSoftGate.command('horn');
+assert.equal(scoreRun(assessmentSoftGate.state).itemScores[8].earned, 0, '动车后补做不得恢复已锁定的顺序分');
+for (let index = 0; index < 200000 && !assessmentSoftGate.state.completed; index += 1) assessmentSoftGate.tick(0.05);
+assert.equal(assessmentSoftGate.state.completed, true, '考评模式流程不完整时仍应能到达训练终点并结算');
 
 const mismatch = prepare('weather');
 mismatch.command('order-sign');
@@ -119,5 +154,18 @@ assert.equal(mismatch.state.authority, false);
 assert.equal(mismatch.state.traction, 0);
 assert.equal(mismatch.state.autoBrake, 5);
 
+const assessmentMismatch = prepare('weather', 'assessment');
+assessmentMismatch.command('order-sign');
+assessmentMismatch.command('locomotive-signal-answer', 'green');
+assessmentMismatch.command('weather-report');
+assessmentMismatch.command('hand-signal-confirm');
+assessmentMismatch.command('direction', 'F');
+assessmentMismatch.command('traction', 1);
+for (let index = 0; index < 12000 && assessmentMismatch.state.credentialStage !== 'confirm-ground-signal'; index += 1) assessmentMismatch.tick(0.05);
+assert.equal(assessmentMismatch.command('signal-answer', 'red'), false);
+assert.equal(assessmentMismatch.state.signalMismatch, true, '考评模式信号不一致仍须强制停车');
+assert.equal(assessmentMismatch.state.traction, 0);
+assert.equal(assessmentMismatch.state.autoBrake, 5);
+
 assert.equal(PROCEDURE.reduce((sum, [, , weight]) => sum + weight, 0), 100);
-console.log('Training scenarios valid: normal, weather, greenPermit, routeTicket; mismatch stop and LKJ unlock checks passed.');
+console.log('Training scenarios valid: four scenarios, LKJ 60/45 unlock, assessment soft gates, and hard mismatch stop passed.');

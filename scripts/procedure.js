@@ -21,11 +21,33 @@ export function procedureState(state) {
   return { complete, current: current < 0 ? PROCEDURE.length - 1 : current, done: complete.every(Boolean) };
 }
 
+function credentialStepEarned(state) {
+  const locked = new Set(state.assessmentCredentialLocks || []);
+  if (!state.lkjUnlockRequired) {
+    return (state.credentialCorrect && !locked.has('credential') ? 14 : 0)
+      + ((!state.handSignalRequired || state.handSignalConfirmed) && !locked.has('handSignal') ? 6 : 0);
+  }
+  let earned = 0;
+  if (state.credentialCorrect && !locked.has('credential')) earned += 6;
+  if (state.departureNoticeReceived && !locked.has('notice')) earned += 3;
+  if ((!state.handSignalRequired || state.handSignalConfirmed) && !locked.has('handSignal')) earned += 3;
+  if (state.lkjUnlockMethodCorrect && !state.lkjUnlockMethodErrorRecorded && !locked.has('method')) earned += 2;
+  if (state.lkjUnlockFieldsCorrect && !state.lkjUnlockFieldsErrorRecorded && !locked.has('fields')) earned += 3;
+  if (state.lkjUnlockCombinationCorrect && !state.lkjUnlockCombinationErrorRecorded && !locked.has('combination')) earned += 3;
+  return earned;
+}
+
 export function scoreRun(state) {
   const p = procedureState(state);
-  const itemScores = PROCEDURE.map(([label, workflowTest, weight, scoreTest = workflowTest]) => ({
-    label, weight, complete: workflowTest(state), correct: scoreTest(state), earned: scoreTest(state) ? weight : 0,
-  }));
+  const scoreLocks = new Set(state.assessmentScoreLocks || []);
+  const itemScores = PROCEDURE.map(([label, workflowTest, weight, scoreTest = workflowTest], index) => {
+    const rawEarned = index === 7 ? credentialStepEarned(state) : scoreTest(state) ? weight : 0;
+    const earned = scoreLocks.has(index) ? 0 : rawEarned;
+    return {
+      label, weight, complete: workflowTest(state), correct: earned === weight, earned,
+      locked: scoreLocks.has(index),
+    };
+  });
   const base = itemScores.reduce((sum, item) => sum + item.earned, 0);
   const deductions = Math.min(20, state.rejected * 2 + state.abrupt * 2 + (state.maxAcceleration > .55 ? 4 : 0));
   return { score: Math.max(0, Math.min(100, base - deductions)), completed: p.complete.filter(Boolean).length, deductions, itemScores };

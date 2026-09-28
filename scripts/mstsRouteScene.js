@@ -1,5 +1,5 @@
 import * as THREE from '../lib/three/three.module.js';
-import { ROUTE_CONTEXT } from './credentialScenario.js?rev=neiyi-route-unlock-v1-20260928';
+import { ROUTE_CONTEXT } from './credentialScenario.js?rev=lkj-nonnormal-v2-20260928';
 
 // fetch() 的相对地址以页面而非当前模块为基准；GitHub Pages 位于仓库子目录，
 // 因此所有三维资源必须相对 import.meta.url 解析，不能使用普通 ../assets 字符串。

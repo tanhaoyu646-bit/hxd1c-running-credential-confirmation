@@ -1,5 +1,5 @@
-import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=neiyi-route-unlock-v1-20260928';
-import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=neiyi-route-unlock-v1-20260928';
+import { SIGNAL_ASPECTS, getLkjMismatchFields } from './scenario.js?rev=lkj-nonnormal-v2-20260928';
+import { getScenario, ROUTE_CONTEXT } from './credentialScenario.js?rev=lkj-nonnormal-v2-20260928';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const TRACTION_BRAKE_CYL_MAX = 15;
@@ -27,6 +27,10 @@ export class TrainSimulation {
       lkjConfirmed: false, lkjAttempted: false, lkjCorrect: false, lkjErrors: [], lkjData: null,
       lkjStartAttempted: false, lkjStartCorrect: false, lkjStartError: '', lkjStartDistance: null,
       lkjUnlockRequired: false, lkjUnlockAttempted: false, lkjUnlockCorrect: false, lkjUnlockCode: '', lkjUnlockErrors: [],
+      lkjUnlockMethod: '', lkjUnlockMethodAttempted: false, lkjUnlockMethodCorrect: false,
+      lkjUnlockFieldsAttempted: false, lkjUnlockFieldsCorrect: false, lkjUnlockData: null,
+      lkjUnlockCombinationAttempted: false, lkjUnlockCombinationCorrect: false, lkjUnlockLimit: 0,
+      lkjUnlockMethodErrorRecorded: false, lkjUnlockFieldsErrorRecorded: false, lkjUnlockCombinationErrorRecorded: false,
       panto: false, mainBreaker: false, compressor: false,
       parkingBrake: true, authority: false, trainingMode: 'teaching', signalAspect: 'green', signalObserved: false, signalAnswer: null,
       signalMeaningCorrect: false, handSignalRequired: true, handSignalConfirmed: false,
@@ -47,6 +51,7 @@ export class TrainSimulation {
       netVoltage: 0, speed: 0, distance: 0, tractionForce: 0, brakeForce: 0,
       brakeTested: false, releaseObserved: false, lowNotchStartConfirmed: false, elapsed: 0,
       rejected: 0, abrupt: 0, maxAcceleration: 0, maxJerk: 0, lastAcceleration: 0,
+      assessmentFirstTractionRecorded: false, assessmentScoreLocks: [], assessmentCredentialLocks: [], assessmentSequenceErrors: [],
     };
     this.emit();
   }
@@ -78,13 +83,50 @@ export class TrainSimulation {
   isAssessment() { return this.state.trainingMode === 'assessment'; }
   initialWorkflowReady() { return this.state.initialConfirmed || (this.isAssessment() && this.state.initialAttempted); }
   lkjWorkflowReady() { return this.state.lkjConfirmed || (this.isAssessment() && this.state.lkjAttempted); }
+  lockAssessmentScore(index, reason) {
+    if (!this.isAssessment()) return;
+    const s = this.state;
+    if (!s.assessmentScoreLocks.includes(index)) s.assessmentScoreLocks.push(index);
+    if (reason && !s.assessmentSequenceErrors.includes(reason)) s.assessmentSequenceErrors.push(reason);
+  }
+  lockAssessmentCredential(key, reason) {
+    if (!this.isAssessment()) return;
+    const s = this.state;
+    if (!s.assessmentCredentialLocks.includes(key)) s.assessmentCredentialLocks.push(key);
+    if (reason && !s.assessmentSequenceErrors.includes(reason)) s.assessmentSequenceErrors.push(reason);
+  }
+  recordAssessmentDepartureSnapshot() {
+    const s = this.state;
+    if (!this.isAssessment() || s.assessmentFirstTractionRecorded) return;
+    s.assessmentFirstTractionRecorded = true;
+    const scenario = getScenario(s.scenarioId);
+    const checks = [
+      [0, s.scenarioSelected, '未选择场景即动车'],
+      [1, s.initialConfirmed, '未完成初始位置核对即动车'],
+      [2, s.lkjConfirmed, '未正确完成LKJ参数与揭示核对即动车'],
+      [3, s.panto && s.netVoltage >= 22.5 && s.mainBreaker && s.compressor && s.mainRes >= 750, '受电弓、主断、空压机或总风准备不完整即动车'],
+      [4, s.brakeTested, '未完成简略制动机试验即动车'],
+      [5, s.releaseObserved, '未确认制动缓解即动车'],
+      [6, !s.parkingBrake, '未缓解停放制动即动车'],
+      [8, s.headlight && s.horn, '未开启前照灯或未鸣笛即动车'],
+      [9, s.direction === 'F', '换向手柄未置前进位即动车'],
+    ];
+    for (const [index, correct, reason] of checks) if (!correct) this.lockAssessmentScore(index, reason);
+    if (!s.credentialCorrect) this.lockAssessmentCredential('credential', `${scenario.label}行车凭证未正确确认即动车`);
+    if (!s.departureNoticeReceived && scenario.id !== 'normal') this.lockAssessmentCredential('notice', '未接收发车通知即动车');
+    if (s.handSignalRequired && !s.handSignalConfirmed) this.lockAssessmentCredential('handSignal', '未确认发车手信号即动车');
+    if (s.lkjUnlockRequired && !s.lkjUnlockMethodCorrect) this.lockAssessmentCredential('method', '未正确选择LKJ非正常行车方式即动车');
+    if (s.lkjUnlockRequired && !s.lkjUnlockFieldsCorrect) this.lockAssessmentCredential('fields', '未正确输入LKJ非正常行车编号即动车');
+    if (s.lkjUnlockRequired && !s.lkjUnlockCombinationCorrect) this.lockAssessmentCredential('combination', '未正确完成LKJ解锁组合键即动车');
+  }
   tractionInterlockReasons() {
     const s = this.state;
     const reasons = [];
-    if (!s.authority) reasons.push('行车凭证、开车通知或发车手信号尚未正确确认');
+    if (!this.isAssessment() && !s.authority) reasons.push('行车凭证、开车通知或发车手信号尚未正确确认');
+    if (!s.panto || s.netVoltage < 19) reasons.push('受电弓未升起或网压未建立');
     if (!s.mainBreaker) reasons.push('主断路器未闭合');
-    if (!s.headlight) reasons.push('前照灯未开启');
-    if (!s.horn) reasons.push('尚未鸣笛');
+    if (!this.isAssessment() && !s.headlight) reasons.push('前照灯未开启');
+    if (!this.isAssessment() && !s.horn) reasons.push('尚未鸣笛');
     if (s.direction !== 'F') reasons.push('换向手柄未在前进位');
     if (s.parkingBrake) reasons.push('停放制动未缓解');
     if (s.autoBrake > 0) reasons.push('自动制动阀未在运转位');
@@ -147,6 +189,10 @@ export class TrainSimulation {
       s.lkjUnlockAttempted = false; s.lkjUnlockCorrect = false;
       s.lkjUnlockCode = scenario.lkjUnlockCode || '';
       s.lkjUnlockErrors = [];
+      s.lkjUnlockMethod = ''; s.lkjUnlockMethodAttempted = false; s.lkjUnlockMethodCorrect = false;
+      s.lkjUnlockFieldsAttempted = false; s.lkjUnlockFieldsCorrect = false; s.lkjUnlockData = null;
+      s.lkjUnlockCombinationAttempted = false; s.lkjUnlockCombinationCorrect = false; s.lkjUnlockLimit = 0;
+      s.lkjUnlockMethodErrorRecorded = false; s.lkjUnlockFieldsErrorRecorded = false; s.lkjUnlockCombinationErrorRecorded = false;
       s.signalMismatch = false; s.signalPassed = false; s.completed = false;
       this.syncAuthority();
       this.emit(`已选择“${scenario.label}”场景：${scenario.description}`);
@@ -200,23 +246,69 @@ export class TrainSimulation {
       }
       s.credentialAttempted = true; s.credentialCorrect = correct;
       s.credentialStage = s.lkjUnlockRequired ? 'await-lkj-unlock' : 'await-departure-notice';
-      this.emit(s.credentialCorrect ? '行车凭证已核对。请接收发车通知。' : '凭证核对错误已记录；考评流程继续。');
+      this.emit(s.credentialCorrect ? (s.lkjUnlockRequired ? '行车凭证已核对。请在LKJ监控主界面长按【↑】2秒，完成非正常行车确认。' : '行车凭证已核对。请接收发车通知。') : '凭证核对错误已记录；考评流程继续。');
+      return true;
+    }
+    if (id === 'lkj-special-method') {
+      if (!s.lkjUnlockRequired) return this.reject('当前场景不要求LKJ非正常行车解锁。');
+      const scenario = getScenario(s.scenarioId);
+      const method = String(value || '');
+      s.lkjUnlockMethod = method;
+      s.lkjUnlockMethodAttempted = true;
+      s.lkjUnlockMethodCorrect = method === scenario.lkjUnlockMethod;
+      if (!s.lkjUnlockMethodCorrect && !this.isAssessment()) {
+        return this.reject(`本场景应选择“${scenario.lkjUnlockLabel}”。`);
+      }
+      if (!s.lkjUnlockMethodCorrect) {
+        s.lkjUnlockMethodErrorRecorded = true;
+        if (!s.assessmentSequenceErrors.includes('LKJ非正常行车方式选择错误')) s.assessmentSequenceErrors.push('LKJ非正常行车方式选择错误');
+      }
+      this.emit(s.lkjUnlockMethodCorrect ? `已选择${scenario.lkjUnlockLabel}确认方式。` : '非正常行车方式选择错误已记录；考评流程继续。');
+      return true;
+    }
+    if (id === 'lkj-special-input') {
+      if (!s.lkjUnlockRequired) return this.reject('当前场景不要求LKJ非正常行车解锁。');
+      const scenario = getScenario(s.scenarioId);
+      if (!s.lkjUnlockMethodAttempted && !this.isAssessment()) return this.reject('请先选择非正常行车确认方式。');
+      const data = value && typeof value === 'object' ? value : {};
+      const fields = scenario.lkjUnlockFields || [];
+      const errors = fields.filter(([key, , expected]) => String(data[key] ?? '').trim() !== String(expected)).map(([key]) => key);
+      s.lkjUnlockData = { ...data };
+      s.lkjUnlockFieldsAttempted = true;
+      s.lkjUnlockFieldsCorrect = errors.length === 0;
+      s.lkjUnlockErrors = errors;
+      if (!s.lkjUnlockFieldsCorrect && !this.isAssessment()) {
+        return this.reject('LKJ输入内容与行车凭证不一致，请重新核对。');
+      }
+      if (!s.lkjUnlockFieldsCorrect) {
+        s.lkjUnlockFieldsErrorRecorded = true;
+        if (!s.assessmentSequenceErrors.includes('LKJ非正常行车编号输入错误')) s.assessmentSequenceErrors.push('LKJ非正常行车编号输入错误');
+      }
+      this.emit(s.lkjUnlockFieldsCorrect ? '非正常行车凭证编号已确认，请执行【解锁】＋【确认】。' : 'LKJ编号输入错误已记录；考评流程继续。');
       return true;
     }
     if (id === 'lkj-special-unlock') {
       if (!s.lkjUnlockRequired) return this.reject('当前场景不要求LKJ非正常行车解锁。');
-      if (!s.credentialAttempted) return this.reject('请先完成绿色许可证或路票核对。');
-      const code = String(value || '').trim();
+      const scenario = getScenario(s.scenarioId);
+      if (!s.credentialAttempted && !this.isAssessment()) return this.reject('请先完成绿色许可证或路票核对。');
+      if (!s.lkjUnlockFieldsAttempted && !this.isAssessment()) return this.reject('请先输入并确认凭证编号。');
+      s.lkjUnlockCombinationAttempted = true;
+      s.lkjUnlockCombinationCorrect = value === true;
       s.lkjUnlockAttempted = true;
-      s.lkjUnlockCorrect = code === s.lkjUnlockCode;
-      s.lkjUnlockErrors = s.lkjUnlockCorrect ? [] : ['lkjUnlockCode'];
+      s.lkjUnlockCorrect = Boolean(s.lkjUnlockMethodCorrect && s.lkjUnlockFieldsCorrect && s.lkjUnlockCombinationCorrect);
+      if (!s.lkjUnlockCombinationCorrect && !s.lkjUnlockErrors.includes('combination')) s.lkjUnlockErrors.push('combination');
       if (!s.lkjUnlockCorrect && !this.isAssessment()) {
         this.syncAuthority();
-        return this.reject('LKJ解锁内容不正确，请按凭证编号或电话记录号重新输入。');
+        return this.reject('请先按【解锁】，再在2秒内按【确认】完成组合解锁。');
       }
+      if (!s.lkjUnlockCombinationCorrect) {
+        s.lkjUnlockCombinationErrorRecorded = true;
+        if (!s.assessmentSequenceErrors.includes('LKJ非正常行车解锁组合键操作不正确')) s.assessmentSequenceErrors.push('LKJ非正常行车解锁组合键操作不正确');
+      }
+      s.lkjUnlockLimit = s.lkjUnlockCorrect ? Number(scenario.lkjUnlockLimit || 0) : 0;
       s.credentialStage = 'await-departure-notice';
       this.syncAuthority();
-      this.emit(s.lkjUnlockCorrect ? 'LKJ非正常行车解锁完成。请接收发车通知。' : 'LKJ解锁错误已记录；考评流程继续。');
+      this.emit(s.lkjUnlockCorrect ? `LKJ非正常行车解锁完成，模式限速 ${s.lkjUnlockLimit} km/h。请接收发车通知。` : 'LKJ解锁错误已记录；考评流程继续。');
       return true;
     }
     if (id === 'departure-notice') {
@@ -281,8 +373,9 @@ export class TrainSimulation {
       this.emit(`已正确确认${SIGNAL_ASPECTS[s.signalAspect].label}。请继续确认运行方向。`); return true;
     }
     if (id === 'hand-signal-confirm') {
-      if (!s.credentialConfirmed) return this.reject('请先完成本场景行车凭证和开车通知确认。');
+      if (!s.credentialConfirmed && !this.isAssessment()) return this.reject('请先完成本场景行车凭证和开车通知确认。');
       if (!s.credentialCorrect && !this.isAssessment()) return this.reject('行车凭证或运行方向核对不正确，不能确认发车手信号。');
+      if (this.isAssessment() && !s.credentialConfirmed) this.lockAssessmentCredential('handSignal', '未完成行车凭证和开车通知即确认发车手信号');
       s.handSignalConfirmed = true; this.syncAuthority(); this.emit('发车手信号已确认，具备发车条件。'); return true;
     }
     if (id === 'power-cabinet-switch') {
@@ -334,7 +427,7 @@ export class TrainSimulation {
       this.emit('LKJ 参数已输入，运行揭示已查询确认；列车起动后须在开车对标点按压【开车／7】键。'); return true;
     }
     if (id === 'lkj-start') {
-      if (!s.lkjConfirmed) return this.reject('请先完成 LKJ 参数和运行揭示核对。');
+      if (!this.lkjWorkflowReady()) return this.reject('请先完成 LKJ 参数和运行揭示核对。');
       s.lkjStartAttempted = true;
       s.lkjStartDistance = s.distance;
       const delta = s.distance - ROUTE_CONTEXT.departureSignalDistance;
@@ -354,7 +447,7 @@ export class TrainSimulation {
       return true;
     }
     if (id === 'lkj') { s.lkjData = { debug: true }; s.lkjAttempted = true; s.lkjCorrect = true; s.lkjConfirmed = true; s.lkjStartAttempted = false; s.lkjStartCorrect = false; this.syncAuthority(); this.emit('调试快捷操作：LKJ 已确认。'); return true; }
-    if (id === 'panto') { const next=value===undefined?!s.panto:Boolean(value); if (next && !this.lkjWorkflowReady()) return this.reject('请先完成 LKJ 参数输入与运行揭示核对。'); this.invalidateInitialCheck('panto'); s.panto = next; if (!s.panto) s.mainBreaker = false; this.emit(s.panto ? '受电弓已升起，正在建立网压。' : '受电弓已降下。'); return true; }
+    if (id === 'panto') { const next=value===undefined?!s.panto:Boolean(value); if (next && !this.lkjWorkflowReady() && !this.isAssessment()) return this.reject('请先完成 LKJ 参数输入与运行揭示核对。'); this.invalidateInitialCheck('panto'); s.panto = next; if (!s.panto) s.mainBreaker = false; this.emit(s.panto ? '受电弓已升起，正在建立网压。' : '受电弓已降下。'); return true; }
     if (id === 'main-breaker') { const next=value===undefined?!s.mainBreaker:Boolean(value); if (next && (!s.panto || s.netVoltage < 19)) return this.reject('网压未建立，禁止闭合主断路器。'); this.invalidateInitialCheck('mainBreaker'); s.mainBreaker = next; this.emit(s.mainBreaker ? '主断路器已闭合。' : '主断路器已断开。'); return true; }
     if (id === 'compressor') { const next=value===undefined?!s.compressor:Boolean(value); if (next && !s.mainBreaker) return this.reject('主断路器未闭合，空压机不能投入。'); this.invalidateInitialCheck('compressor'); s.compressor = next; this.emit(s.compressor ? '空气压缩机已投入。' : '空气压缩机已停止。'); return true; }
     if (id === 'parking-apply') { this.invalidateInitialCheck('parkingBrake'); s.parkingBrake = true; this.emit('停放制动已施加。'); return true; }
@@ -394,6 +487,7 @@ export class TrainSimulation {
         this.emit(`牵引未投入：${blockers.join('；')}。请确认后重新由零位推至低级位。`);
         return false;
       }
+      if (next > 0) this.recordAssessmentDepartureSnapshot();
       s.traction = next;
       this.emit(next > 0 ? `牵引手柄置于 ${next} 级。` : next < 0 ? `电制动置于 ${Math.abs(next)} 级。` : '牵引手柄已回零。'); return true;
     }
@@ -429,7 +523,8 @@ export class TrainSimulation {
     const mass = 2800000; const resistance = 24000 + 60 * s.speed + 2 * s.speed * s.speed;
     const acceleration = (s.tractionForce - s.brakeForce - resistance) / mass;
     const actual = s.speed <= 0 && acceleration < 0 ? 0 : acceleration;
-    s.speed = clamp(s.speed + actual * dt * 3.6, 0, s.limitedStart ? 15 : 120); s.distance += s.speed / 3.6 * dt;
+    const activeLimit = s.lkjUnlockCorrect && s.lkjUnlockLimit > 0 ? s.lkjUnlockLimit : s.limitedStart ? 15 : 120;
+    s.speed = clamp(s.speed + actual * dt * 3.6, 0, activeLimit); s.distance += s.speed / 3.6 * dt;
     // 课堂中“低级位平稳起动”只需确认低级位下列车已经开始平稳滚动。
     // 达到该状态后可按操纵需要逐级加力，不能把低级位误当作保持到 5 km/h 的限制。
     if (!s.lowNotchStartConfirmed && s.traction >= 1 && s.traction <= 2 && s.speed >= 0.5) {
@@ -445,7 +540,7 @@ export class TrainSimulation {
       s.signalPassed = true;
       this.emit('列车已越过地面出站信号机。');
     }
-    if (s.lkjConfirmed && !s.lkjStartAttempted && s.speed >= 1 && s.distance > ROUTE_CONTEXT.departureSignalDistance + ROUTE_CONTEXT.lkjStartTolerance) {
+    if (this.lkjWorkflowReady() && !s.lkjStartAttempted && s.speed >= 1 && s.distance > ROUTE_CONTEXT.departureSignalDistance + ROUTE_CONTEXT.lkjStartTolerance) {
       s.lkjStartAttempted = true;
       s.lkjStartCorrect = false;
       s.lkjStartError = 'missed';
