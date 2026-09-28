@@ -125,10 +125,15 @@ const interactionChecks = await evaluate(`(() => {
 const cirTailQuery = await evaluate(`new Promise((resolve) => {
   document.querySelector('[data-scenario="normal"]').click();
   document.querySelector('.cir-hotspot').click();
-  setTimeout(() => {
+  const started = Date.now();
+  const waitForCir = setInterval(() => {
     const frame = document.querySelector('.cir-frame');
     const win = frame && frame.contentWindow;
-    if (!win || !Array.isArray(win.mmiinfo) || typeof win.buttonfix !== 'function') { resolve(false); return; }
+    if (!win || !Array.isArray(win.mmiinfo) || typeof win.buttonfix !== 'function') {
+      if (Date.now() - started > 6000) { clearInterval(waitForCir); resolve(false); }
+      return;
+    }
+    clearInterval(waitForCir);
     win.mmiinfo[1] = '9123456';
     win.mmistate = 1;
     win.buttonfix('bt12');
@@ -137,7 +142,7 @@ const cirTailQuery = await evaluate(`new Promise((resolve) => {
       document.querySelector('.cir-modal .device-close')?.click();
       resolve(text.includes('123456') && text.includes('kPa'));
     }, 180);
-  }, 350);
+  }, 100);
 })`, true);
 interactionChecks.cirTailQuery = cirTailQuery;
 const longPressMenu = await evaluate(`new Promise((resolve) => {
