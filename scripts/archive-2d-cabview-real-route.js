@@ -1,8 +1,8 @@
-import { TrainSimulation } from './dynamics.js?rev=professional-equipment-v1-20260928';
-import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=professional-equipment-v1-20260928';
-import { MstsRouteScene } from './mstsRouteScene.js?rev=professional-equipment-v1-20260928';
-import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=professional-equipment-v1-20260928';
-import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=professional-equipment-v1-20260928';
+import { TrainSimulation } from './dynamics.js?rev=professional-equipment-v2-20260928';
+import { PROCEDURE, procedureState, scoreRun } from './procedure.js?rev=professional-equipment-v2-20260928';
+import { MstsRouteScene } from './mstsRouteScene.js?rev=professional-equipment-v2-20260928';
+import { LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js?rev=professional-equipment-v2-20260928';
+import { SCENARIOS, ROUTE_CONTEXT, getScenario, scenarioAudioPath } from './credentialScenario.js?rev=professional-equipment-v2-20260928';
 
 const $ = (q) => document.querySelector(q);
 const sim = new TrainSimulation();
